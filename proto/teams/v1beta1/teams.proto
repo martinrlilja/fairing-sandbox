@@ -1,0 +1,76 @@
+syntax = "proto3";
+
+package fairing.teams.v1beta1;
+
+service Teams {
+  // List all teams of which the current user is a member of.
+  rpc ListTeams(ListTeamsRequest) returns (ListTeamsResponse);
+
+  // Get a team by its name.
+  rpc GetTeam(GetTeamRequest) returns (Team);
+
+  // Create a team.
+  rpc CreateTeam(CreateTeamRequest) returns (Team);
+
+  // Delete a team by its name.
+  rpc DeleteTeam(DeleteTeamRequest) returns (DeleteTeamResponse);
+
+  // List all team members of a team.
+  rpc ListTeamMembers(ListTeamMembersRequest) returns (ListTeamMembersResponse);
+
+  // Add a team member to a team.
+  rpc CreateTeamMember(CreateTeamMemberRequest) returns (TeamMember);
+
+  // Remove a team member from a team.
+  rpc DeleteTeamMember(DeleteTeamMemberRequest) returns (DeleteTeamMemberResponse);
+}
+
+message Team {
+  string name = 1;
+}
+
+message TeamMember {
+  string name = 1;
+  string user_name = 2;
+}
+
+message ListTeamsRequest {
+}
+
+message ListTeamsResponse {
+  repeated Team resources = 1;
+}
+
+message GetTeamRequest {
+  string name = 1;
+}
+
+message CreateTeamRequest {
+  string resource_id = 1;
+}
+
+message DeleteTeamRequest {
+  string name = 1;
+}
+
+message DeleteTeamResponse {
+}
+
+message ListTeamMembersRequest {
+  string team_name = 1;
+}
+
+message ListTeamMembersResponse {
+  repeated TeamMember resources = 1;
+}
+
+message CreateTeamMemberRequest {
+  TeamMember resource = 1;
+}
+
+message DeleteTeamMemberRequest {
+  string name = 1;
+}
+
+message DeleteTeamMemberResponse {
+}

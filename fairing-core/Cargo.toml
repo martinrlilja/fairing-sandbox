@@ -1,0 +1,23 @@
+[package]
+name = "fairing-core"
+version = "0.1.0"
+authors = ["Martin Risell Lilja <martin.risell.lilja@gmail.com>"]
+edition = "2018"
+
+# See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
+
+[dependencies]
+anyhow = "1"
+argon2 = "0.2"
+async-trait = "0.1"
+caseless = "0.2"
+chrono = "0.4"
+fairing-proto = { path = "../fairing-proto" }
+lazy_static = "1"
+rand = "0.8"
+regex = "1"
+sqlx = { version = "0.5", features = ["postgres", "chrono", "macros", "runtime-tokio-rustls"] }
+thrussh-keys = "0.20"
+tracing = "0.1"
+unicode-normalization = "0.1"
+unicode-script = "0.5"

@@ -1,0 +1,10 @@
+[workspace]
+members = [
+    "fairing",
+    "fairing-core",
+    "fairing-proto",
+    "fairingctl",
+]
+
+[profile.release]
+lto = "fat"

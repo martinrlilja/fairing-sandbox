@@ -1,0 +1,19 @@
+[package]
+name = "fairingctl"
+version = "0.1.0"
+authors = ["Martin Risell Lilja <martin.risell.lilja@gmail.com>"]
+edition = "2018"
+
+# See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
+
+[dependencies]
+anyhow = "1"
+clap = "2"
+fairing-core = { path = "../fairing-core" }
+fairing-proto = { path = "../fairing-proto" }
+termion = "1"
+tokio = { version = "1", features = ["macros", "rt"] }
+tonic = { git = "https://github.com/hyperium/tonic" }
+tracing = "0.1"
+tracing-subscriber = "0.2"
+base64 = "0.13"

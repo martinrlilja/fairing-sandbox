@@ -1,0 +1,81 @@
+syntax = "proto3";
+
+package fairing.sites.v1beta1;
+
+service Sites {
+  // List all sites owned by a team.
+  rpc ListSites(ListSitesRequest) returns (ListSitesResponse);
+
+  // Get a site by its name.
+  rpc GetSite(GetSiteRequest) returns (Site);
+
+  // Create a site in a team.
+  rpc CreateSite(CreateSiteRequest) returns (Site);
+
+  // Delete a site by its name.
+  rpc DeleteSite(DeleteSiteRequest) returns (DeleteSiteResponse);
+
+  rpc ListSiteSources(ListSiteSourcesRequest) returns (ListSiteSourcesResponse);
+
+  rpc CreateSiteSource(CreateSiteSourceRequest) returns (SiteSource);
+}
+
+message Site {
+  string name = 1;
+}
+
+message ListSitesRequest {
+  string parent = 1;
+}
+
+message ListSitesResponse {
+  repeated Site resources = 1;
+}
+
+message GetSiteRequest {
+  string name = 1;
+}
+
+message CreateSiteRequest {
+  string resource_id = 1;
+  string parent = 2;
+}
+
+message DeleteSiteRequest {
+  string site_name = 1;
+}
+
+message DeleteSiteResponse {
+}
+
+message SiteSource {
+  message GitSource {
+    string repository_url = 1;
+    string id_ed25519_pub = 2;
+  }
+
+  string name = 1;
+
+  string hook_url = 3;
+
+  oneof kind {
+    GitSource git_source = 20;
+  }
+}
+
+message ListSiteSourcesRequest {
+  string parent = 1;
+}
+
+message ListSiteSourcesResponse {
+  repeated SiteSource resources = 1;
+}
+
+message CreateSiteSourceRequest {
+  string resource_id = 1;
+
+  // Site name
+  string parent = 2;
+
+  SiteSource site_source = 3;
+}
