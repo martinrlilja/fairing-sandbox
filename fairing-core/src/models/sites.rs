@@ -1,5 +1,6 @@
-use anyhow::Result;
+use anyhow::{anyhow, Result};
 use chrono::{DateTime, Utc};
+use std::str::FromStr;
 
 use crate::models::{
     self,
@@ -63,7 +64,7 @@ pub enum SiteSourceKind {
 }
 
 pub struct GitSource {
-    pub repository_url: String,
+    pub repository_url: GitRepository,
     pub id_ed25519: Ed25519,
 }
 
@@ -72,12 +73,11 @@ impl sqlx::FromRow<'_, sqlx::postgres::PgRow> for SiteSource {
         use sqlx::Row;
 
         let kind = if let Some(git_repository_url) = row.try_get("git_repository_url")? {
-            let id_ed25519_public_key = row.try_get("git_id_ed25519_public_key")?;
             let id_ed25519_secret_key = row.try_get("git_id_ed25519_secret_key")?;
-            let id_ed25519 = Ed25519::from_row(id_ed25519_public_key, id_ed25519_secret_key);
+            let id_ed25519 = Ed25519::from_row(id_ed25519_secret_key);
 
             let git_source = GitSource {
-                repository_url: git_repository_url,
+                repository_url: GitRepository(git_repository_url),
                 id_ed25519,
             };
 
@@ -114,7 +114,7 @@ impl Into<fairing_proto::sites::v1beta1::site_source::Kind> for SiteSourceKind {
         match self {
             SiteSourceKind::GitSource(git_source) => {
                 let git_source = GitSource {
-                    repository_url: git_source.repository_url,
+                    repository_url: git_source.repository_url.0,
                     id_ed25519_pub: git_source.id_ed25519.id_ed25519_pub(),
                 };
                 Kind::GitSource(git_source)
@@ -123,21 +123,83 @@ impl Into<fairing_proto::sites::v1beta1::site_source::Kind> for SiteSourceKind {
     }
 }
 
+pub struct GitRepository(String);
+
+impl GitRepository {
+    pub fn as_str(&'_ self) -> &'_ str {
+        &self.0
+    }
+
+    pub fn parts(&self) -> Result<GitRepositoryParts> {
+        self.0.parse()
+    }
+}
+
+impl FromStr for GitRepository {
+    type Err = anyhow::Error;
+
+    fn from_str(s: &str) -> Result<GitRepository> {
+        GitRepositoryParts::from_str(s).map(|_| GitRepository(s.to_owned()))
+    }
+}
+
+pub struct GitRepositoryParts {
+    pub user: String,
+    pub host: String,
+    pub port: u16,
+    pub path: String,
+}
+
+impl FromStr for GitRepositoryParts {
+    type Err = anyhow::Error;
+
+    fn from_str(s: &str) -> Result<GitRepositoryParts> {
+        use regex::Regex;
+
+        lazy_static::lazy_static! {
+            static ref RE: Regex = Regex::new(r"^(?P<user>[^@]+)@(?P<host>[^:]+):(?P<path>[^'\\]+)$").unwrap();
+        };
+
+        if s.starts_with("ssh://") {
+            let url = url::Url::parse(s)?;
+
+            Ok(GitRepositoryParts {
+                user: url.username().to_owned(),
+                host: url.host_str().unwrap_or("").to_owned(),
+                port: url.port().unwrap_or(22),
+                // TODO: there is some special handling that must be done regarding ~
+                // see more: https://git-scm.com/docs/pack-protocol/#_ssh_transport
+                path: url.path().to_owned(),
+            })
+        } else {
+            let captures = RE.captures(s);
+            let captures = if let Some(captures) = captures {
+                captures
+            } else {
+                return Err(anyhow!("invalid repository url"));
+            };
+
+            let user = captures.name("user").unwrap();
+            let host = captures.name("host").unwrap();
+            let path = captures.name("path").unwrap();
+
+            Ok(GitRepositoryParts {
+                user: user.as_str().to_owned(),
+                host: host.as_str().to_owned(),
+                port: 22,
+                path: path.as_str().to_owned(),
+            })
+        }
+    }
+}
+
 pub struct Ed25519 {
-    public_key: thrussh_keys::key::ed25519::PublicKey,
     secret_key: thrussh_keys::key::ed25519::SecretKey,
 }
 
 impl Ed25519 {
-    pub fn from_row(public_key: Vec<u8>, secret_key: Vec<u8>) -> Ed25519 {
-        use thrussh_keys::key::ed25519::{PublicKey, SecretKey};
-
-        let public_key = {
-            let mut key = PublicKey::new_zeroed();
-            assert_eq!(key.key.len(), public_key.len());
-            key.key.copy_from_slice(&public_key);
-            key
-        };
+    pub fn from_row(secret_key: Vec<u8>) -> Ed25519 {
+        use thrussh_keys::key::ed25519::SecretKey;
 
         let secret_key = {
             let mut key = SecretKey::new_zeroed();
@@ -146,14 +208,7 @@ impl Ed25519 {
             key
         };
 
-        Ed25519 {
-            public_key,
-            secret_key,
-        }
-    }
-
-    pub fn public_key_to_slice(&self) -> &[u8] {
-        &self.public_key.key
+        Ed25519 { secret_key }
     }
 
     pub fn secret_key_to_slice(&self) -> &[u8] {
@@ -161,18 +216,20 @@ impl Ed25519 {
     }
 
     pub fn generate() -> Ed25519 {
-        let (public_key, secret_key) = thrussh_keys::key::ed25519::keypair();
-        Ed25519 {
-            public_key,
-            secret_key,
-        }
+        let (_public_key, secret_key) = thrussh_keys::key::ed25519::keypair();
+        Ed25519 { secret_key }
     }
 
     pub fn public_key(&self) -> thrussh_keys::key::PublicKey {
-        use thrussh_keys::key::ed25519::PublicKey;
-        thrussh_keys::key::PublicKey::Ed25519(PublicKey {
-            key: self.public_key.key,
-        })
+        let key_pair = self.key_pair();
+        key_pair.clone_public_key()
+    }
+
+    pub fn key_pair(&self) -> thrussh_keys::key::KeyPair {
+        let secret_key = thrussh_keys::key::ed25519::SecretKey {
+            key: self.secret_key.key,
+        };
+        thrussh_keys::key::KeyPair::Ed25519(secret_key)
     }
 
     pub fn id_ed25519_pub(&self) -> String {
@@ -198,7 +255,7 @@ impl<'a> CreateSiteSource<'a> {
     pub fn create(&self) -> Result<SiteSource> {
         use rand::distributions::Distribution;
 
-        const HEX: &[u8; 16] = b"abcdef0123456789";
+        const HEX: &[u8; 16] = b"0123456789abcdef";
 
         let name = format!("{}/sources/{}", self.parent.name(), self.resource_id);
         let name = SiteSourceName::parse(name)?;
@@ -225,7 +282,7 @@ impl<'a> CreateSiteSourceKind<'a> {
         match self {
             &CreateSiteSourceKind::GitSource { repository_url } => {
                 let git_source = GitSource {
-                    repository_url: repository_url.into(),
+                    repository_url: repository_url.parse()?,
                     id_ed25519: Ed25519::generate(),
                 };
 

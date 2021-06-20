@@ -7,7 +7,8 @@ use fairing_core::{
 use fairing_proto::sites::v1beta1::{
     site_source, sites_server::Sites, CreateSiteRequest, CreateSiteSourceRequest,
     DeleteSiteRequest, DeleteSiteResponse, GetSiteRequest, ListSiteSourcesRequest,
-    ListSiteSourcesResponse, ListSitesRequest, ListSitesResponse, Site, SiteSource,
+    ListSiteSourcesResponse, ListSitesRequest, ListSitesResponse, RefreshSiteSourceRequest,
+    RefreshSiteSourceResponse, Site, SiteSource,
 };
 
 #[derive(Debug)]
@@ -171,5 +172,55 @@ impl Sites for SitesService {
             })?;
 
         Ok(Response::new(site_source.into()))
+    }
+
+    #[tracing::instrument]
+    async fn refresh_site_source(
+        &self,
+        request: Request<RefreshSiteSourceRequest>,
+    ) -> Result<Response<RefreshSiteSourceResponse>, Status> {
+        let _user = super::auth(&self.database, &request).await?;
+
+        let site_source = request.into_inner();
+
+        let site_source_name = models::SiteSourceName::parse(site_source.name)
+            .map_err(|_err| Status::invalid_argument("name is not a valid site source name"))?;
+
+        // FIXME: check if the user is a member of the team.
+
+        let site_source = self
+            .database
+            .get_site_source(&site_source_name)
+            .await
+            .map_err(|err| {
+                tracing::error!("error: {:?}", err);
+                Status::internal("error when getting site source")
+            })?
+            .ok_or_else(|| Status::not_found("site source not found"))?;
+
+        let remote_site_source = crate::backends::GenericRemoteSiteSource::new();
+
+        let tree_revisions = tokio::time::timeout(
+            std::time::Duration::from_secs(60),
+            remote_site_source.list_tree_revisions(&site_source),
+        )
+        .await
+        .map_err(|_err| Status::unavailable("timed out waiting for the remote source"))?
+        .map_err(|err| {
+            tracing::error!("error when listing tree revisions: {:?}", err);
+            Status::unavailable("there was a problem when trying to list remote revisions")
+        })?;
+
+        for tree_revision in tree_revisions {
+            self.database
+                .create_tree_revision(&tree_revision)
+                .await
+                .map_err(|err| {
+                    tracing::error!("error: {:?}", err);
+                    Status::internal("error when creating tree revision")
+                })?;
+        }
+
+        Ok(Response::new(RefreshSiteSourceResponse {}))
     }
 }

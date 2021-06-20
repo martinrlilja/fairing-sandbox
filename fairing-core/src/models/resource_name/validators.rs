@@ -200,6 +200,26 @@ impl ResourceIDValidator for DomainLabelValidator {
     }
 }
 
+pub enum RevisionValidator {}
+
+impl ResourceIDValidator for RevisionValidator {
+    fn validate(resource_id: &'_ str) -> Option<&'_ str> {
+        lazy_static::lazy_static! {
+            static ref RE: regex::Regex = regex::Regex::new(
+                r"^[^\n\t\\/]*$"
+            ).unwrap();
+        }
+
+        let resource_id = resource_id.split('/').next()?;
+
+        if resource_id.len() <= 200 && RE.is_match(resource_id) {
+            Some(resource_id)
+        } else {
+            None
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

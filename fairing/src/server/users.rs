@@ -23,8 +23,6 @@ impl Users for UsersService {
         &self,
         request: Request<CreateUserRequest>,
     ) -> Result<Response<User>, Status> {
-        println!("Got a request from {:?}", request.remote_addr());
-
         let user = fairing_core::models::CreateUser {
             resource_id: &request.get_ref().resource_id,
             password: &request.get_ref().password,

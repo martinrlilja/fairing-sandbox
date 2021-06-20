@@ -18,6 +18,8 @@ service Sites {
   rpc ListSiteSources(ListSiteSourcesRequest) returns (ListSiteSourcesResponse);
 
   rpc CreateSiteSource(CreateSiteSourceRequest) returns (SiteSource);
+
+  rpc RefreshSiteSource(RefreshSiteSourceRequest) returns (RefreshSiteSourceResponse);
 }
 
 message Site {
@@ -78,4 +80,11 @@ message CreateSiteSourceRequest {
   string parent = 2;
 
   SiteSource site_source = 3;
+}
+
+message RefreshSiteSourceRequest {
+  string name = 1;
+}
+
+message RefreshSiteSourceResponse {
 }

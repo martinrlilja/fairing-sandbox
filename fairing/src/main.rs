@@ -14,7 +14,7 @@ async fn main() -> Result<()> {
         .get_matches();
 
     let subscriber = tracing_subscriber::FmtSubscriber::builder()
-        .with_max_level(tracing::Level::TRACE)
+        .with_env_filter(tracing_subscriber::EnvFilter::from_default_env())
         .finish();
 
     tracing::subscriber::set_global_default(subscriber).expect("setting default subscriber failed");

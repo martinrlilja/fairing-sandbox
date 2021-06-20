@@ -35,29 +35,25 @@ CREATE TABLE blobs (
 
 -- File storage
 CREATE TABLE files (
-    id UUID PRIMARY KEY,
-    created_time TIMESTAMPTZ NOT NULL,
-
     team_id UUID REFERENCES teams (id) ON DELETE CASCADE NOT NULL,
-
+    checksum BYTEA NOT NULL,
     "size" BIGINT NOT NULL,
+
     is_valid_utf8 BOOLEAN NOT NULL,
 
-    checksum_blake2b BYTEA NOT NULL,
-    checksum_sha256 BYTEA NOT NULL,
-    checksum_sha1 BYTEA NOT NULL,
-
-    UNIQUE (team_id, checksum_blake2b)
+    PRIMARY KEY (team_id, checksum)
 );
 
 CREATE TABLE file_chunks (
-    file_id UUID REFERENCES files (id) ON DELETE CASCADE NOT NULL,
+    team_id UUID NOT NULL,
+    file_checksum BYTEA NOT NULL,
     start_byte_offset BIGINT NOT NULL,
     end_byte_offset BIGINT NOT NULL,
 
     blob_checksum BYTEA REFERENCES blobs (checksum) ON DELETE RESTRICT NOT NULL,
 
-    PRIMARY KEY (file_id, start_byte_offset, end_byte_offset)
+    PRIMARY KEY (team_id, file_checksum, start_byte_offset, end_byte_offset),
+    FOREIGN KEY (team_id, file_checksum) REFERENCES files (team_id, checksum) ON DELETE CASCADE
 );
 
 -- Sites
@@ -87,7 +83,6 @@ CREATE TABLE site_sources (
 CREATE TABLE site_source_git (
     site_source_id UUID PRIMARY KEY REFERENCES site_sources (id) ON DELETE CASCADE,
     repository_url TEXT NOT NULL,
-    id_ed25519_public_key BYTEA,
     id_ed25519_secret_key BYTEA
 );
 
@@ -107,29 +102,45 @@ CREATE UNIQUE INDEX domain_fqdn ON domains (fqdn) WHERE is_validated = TRUE;
 CREATE TABLE trees (
     id UUID PRIMARY KEY,
     created_time TIMESTAMPTZ NOT NULL,
+    name TEXT NOT NULL,
 
-    site_id UUID REFERENCES sites (id) ON DELETE CASCADE NOT NULL,
+    site_source_id UUID REFERENCES site_sources (id) ON DELETE SET NULL,
 
-    reference TEXT NOT NULL,
     version BIGINT NOT NULL,
-    draft_version BIGINT NOT NULL,
 
-    parent_tree_id UUID REFERENCES trees (id) ON DELETE CASCADE,
-    parent_tree_version BIGINT,
+    UNIQUE (site_source_id, name)
+);
 
-    UNIQUE (site_id, reference)
+CREATE TYPE tree_revision_status AS ENUM (
+    'ignore',
+    'fetch',
+    'fetch_draft',
+    'draft',
+    'complete'
+);
+
+CREATE TABLE tree_revisions (
+    tree_id UUID REFERENCES trees (id) ON DELETE CASCADE NOT NULL,
+    version BIGINT NOT NULL,
+    created_time TIMESTAMPTZ NOT NULL,
+
+    name TEXT NOT NULL,
+    status tree_revision_status NOT NULL,
+
+    PRIMARY KEY (tree_id, version),
+    UNIQUE (tree_id, name)
 );
 
 CREATE TABLE tree_leaves (
     tree_id UUID REFERENCES trees (id) ON DELETE CASCADE NOT NULL,
+    path TEXT NOT NULL,
     version BIGINT NOT NULL,
 
-    path TEXT NOT NULL,
-    is_deleted BOOLEAN NOT NULL,
+    team_id UUID,
+    file_checksum BYTEA,
 
-    file_id UUID REFERENCES files (id) NOT NULL,
-
-    PRIMARY KEY (tree_id, path, version)
+    PRIMARY KEY (tree_id, path, version),
+    FOREIGN KEY (team_id, file_checksum) REFERENCES files (team_id, checksum) ON DELETE CASCADE
 );
 
 -- Deployments
@@ -139,7 +150,6 @@ CREATE TABLE deployments (
     name TEXT UNIQUE NOT NULL,
 
     site_id UUID REFERENCES sites (id) ON DELETE CASCADE NOT NULL,
-    site_source_id UUID REFERENCES site_sources (id) ON DELETE SET NULL,
 
     status TEXT NOT NULL,
     reference TEXT NOT NULL,

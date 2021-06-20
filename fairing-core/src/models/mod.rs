@@ -2,12 +2,14 @@
 
 pub use sites::*;
 pub use teams::*;
+pub use trees::*;
 pub use users::*;
 
 pub mod prelude;
 pub mod resource_name;
 mod sites;
 mod teams;
+mod trees;
 mod users;
 
 #[macro_export]

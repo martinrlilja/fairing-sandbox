@@ -53,6 +53,16 @@ async fn main() -> Result<()> {
                                 .takes_value(true)
                                 .help("Creates a git source for the site."),
                         ),
+                )
+                .subcommand(
+                    SubCommand::with_name("sources")
+                        .about("Site source management")
+                        .setting(AppSettings::SubcommandRequiredElseHelp)
+                        .subcommand(
+                            SubCommand::with_name("refresh")
+                            .about("Refresh site source")
+                            .arg(Arg::with_name("site-source")),
+                        )
                 ),
         )
         .get_matches();
@@ -162,7 +172,7 @@ async fn command_teams(matches: &ArgMatches<'_>) -> Result<()> {
 async fn command_sites(matches: &ArgMatches<'_>) -> Result<()> {
     use fairing_proto::sites::v1beta1::{
         site_source, sites_client::SitesClient, CreateSiteRequest, CreateSiteSourceRequest,
-        ListSitesRequest, SiteSource,
+        ListSitesRequest, RefreshSiteSourceRequest, SiteSource,
     };
 
     let channel = Channel::from_static("http://[::1]:8000").connect().await?;
@@ -227,6 +237,18 @@ async fn command_sites(matches: &ArgMatches<'_>) -> Result<()> {
 
         for site in response.get_ref().resources.iter() {
             println!("{}", site.name);
+        }
+    } else if let Some(matches) = matches.subcommand_matches("sources") {
+        if let Some(matches) = matches.subcommand_matches("refresh") {
+            let name = matches
+                .value_of("site-source")
+                .expect("site source name must be set");
+
+            let _response = sites_client
+                .refresh_site_source(RefreshSiteSourceRequest { name: name.into() })
+                .await?;
+
+            println!("Refreshed site source");
         }
     }
 

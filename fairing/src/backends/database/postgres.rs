@@ -1,4 +1,4 @@
-use anyhow::{anyhow, ensure, Result};
+use anyhow::{anyhow, ensure, Context, Result};
 use std::sync::Arc;
 use uuid::Uuid;
 
@@ -422,7 +422,6 @@ impl database::SiteRepository for PostgresDatabase {
             SELECT 'teams/' || t.name || '/sites/' || s.name || '/sources/' || ss.name AS name,
                     ss.created_time, ss.hook_token, ss.last_refresh_time,
                     ss_git.repository_url AS git_repository_url,
-                    ss_git.id_ed25519_public_key AS git_id_ed25519_public_key,
                     ss_git.id_ed25519_secret_key AS git_id_ed25519_secret_key
             FROM site_sources ss
             LEFT JOIN site_source_git ss_git
@@ -440,6 +439,35 @@ impl database::SiteRepository for PostgresDatabase {
         .await?;
 
         Ok(site_sources)
+    }
+
+    async fn get_site_source(
+        &self,
+        site_source_name: &models::SiteSourceName,
+    ) -> Result<Option<models::SiteSource>> {
+        let site_source = sqlx::query_as(
+            r"
+            SELECT 'teams/' || t.name || '/sites/' || s.name || '/sources/' || ss.name AS name,
+                    ss.created_time, ss.hook_token, ss.last_refresh_time,
+                    ss_git.repository_url AS git_repository_url,
+                    ss_git.id_ed25519_secret_key AS git_id_ed25519_secret_key
+            FROM site_sources ss
+            LEFT JOIN site_source_git ss_git
+                ON ss_git.site_source_id = ss.id
+            JOIN sites s
+                ON s.id = ss.site_id
+            JOIN teams t
+                ON t.id = s.team_id
+            WHERE t.name = $1 AND s.name = $2 AND ss.name = $3;
+            ",
+        )
+        .bind(site_source_name.parent().parent().resource())
+        .bind(site_source_name.parent().resource())
+        .bind(site_source_name.resource())
+        .fetch_optional(&self.pool)
+        .await?;
+
+        Ok(site_source)
     }
 
     async fn create_site_source(
@@ -479,13 +507,12 @@ impl database::SiteRepository for PostgresDatabase {
             Some(models::SiteSourceKind::GitSource(ref git_source)) => {
                 sqlx::query(
                     r"
-                    INSERT INTO site_source_git (site_source_id, repository_url, id_ed25519_public_key, id_ed25519_secret_key)
-                    VALUES ($1, $2, $3, $4);
+                    INSERT INTO site_source_git (site_source_id, repository_url, id_ed25519_secret_key)
+                    VALUES ($1, $2, $3);
                     ",
                 )
                 .bind(&site_source_id)
-                .bind(&git_source.repository_url)
-                .bind(&git_source.id_ed25519.public_key_to_slice())
+                .bind(&git_source.repository_url.as_str())
                 .bind(&git_source.id_ed25519.secret_key_to_slice())
                 .execute(&mut tx)
                 .await?;
@@ -496,5 +523,147 @@ impl database::SiteRepository for PostgresDatabase {
         tx.commit().await?;
 
         Ok(site_source)
+    }
+}
+
+#[async_trait::async_trait]
+impl database::TreeRepository for PostgresDatabase {
+    async fn list_trees(
+        &self,
+        site_source_name: &models::SiteSourceName,
+    ) -> Result<Vec<models::Tree>> {
+        let trees = sqlx::query_as(
+            r"
+            SELECT 'teams/' || t.name || '/sites/' || s.name || '/sources/' || ss.name || '/trees/' || tr.name AS name,
+                    tr.created_time, tr.version
+            FROM trees tr
+            JOIN site_sources ss
+                ON ss.id = tr.site_source_id
+            JOIN sites s
+                ON s.id = ss.site_id
+            JOIN teams t
+                ON t.id = s.team_id
+            WHERE t.name = $1 AND s.name = $2 AND ss.name = $3;
+            ",
+        )
+        .bind(site_source_name.parent().parent().resource())
+        .bind(site_source_name.parent().resource())
+        .bind(site_source_name.resource())
+        .fetch_all(&self.pool)
+        .await?;
+
+        Ok(trees)
+    }
+
+    async fn get_tree(&self, tree_name: &models::TreeName) -> Result<Option<models::Tree>> {
+        let tree = sqlx::query_as(
+            r"
+            SELECT 'teams/' || t.name || '/sites/' || s.name || '/sources/' || ss.name || '/trees/' || tr.name AS name,
+                    tr.created_time, tr.version
+            FROM trees tr
+            JOIN site_sources ss
+                ON ss.id = tr.site_source_id
+            JOIN sites s
+                ON s.id = ss.site_id
+            JOIN teams t
+                ON t.id = s.team_id
+            WHERE t.name = $1 AND s.name = $2 AND ss.name = $3 AND tr.name = $4;
+            ",
+        )
+        .bind(tree_name.parent().parent().parent().resource())
+        .bind(tree_name.parent().parent().resource())
+        .bind(tree_name.parent().resource())
+        .fetch_optional(&self.pool)
+        .await?;
+
+        Ok(tree)
+    }
+
+    async fn create_tree_revision(
+        &self,
+        tree_revision: &models::CreateTreeRevision,
+    ) -> Result<Option<models::TreeRevision>> {
+        let mut tx = self.pool.begin().await?;
+
+        let tree = models::CreateTree {
+            resource_id: tree_revision.parent.resource(),
+            parent: tree_revision.parent.parent(),
+        };
+        let tree = tree.create().context("creating tree")?;
+
+        let query_result = sqlx::query(
+            r"
+            INSERT INTO trees (id, created_time, name, site_source_id, version)
+            SELECT $1, $2, $3, ss.id, 1
+            FROM site_sources ss
+            JOIN sites s
+                ON s.id = ss.site_id
+            JOIN teams t
+                ON t.id = s.team_id
+            WHERE t.name = $4 AND s.name = $5 AND ss.name = $6
+            ON CONFLICT (site_source_id, name) DO UPDATE SET version = trees.version + 1;
+            ",
+        )
+        .bind(Uuid::new_v4())
+        .bind(tree.created_time)
+        .bind(tree.name.resource())
+        .bind(tree.name.parent().parent().parent().resource())
+        .bind(tree.name.parent().parent().resource())
+        .bind(tree.name.parent().resource())
+        .execute(&mut tx)
+        .await
+        .context("inserting tree")?;
+
+        ensure!(
+            query_result.rows_affected() == 1,
+            "tree parent not found ({})",
+            tree.name.parent().name(),
+        );
+
+        let tree_revision = tree_revision.create().context("creating tree revision")?;
+
+        let name: Option<String> = sqlx::query_scalar(
+            r"
+            INSERT INTO tree_revisions (tree_id, version, created_time, name, status)
+            SELECT tr.id, tr.version, $1, $2, $3
+            FROM trees tr
+            JOIN site_sources ss
+                ON ss.id = tr.site_source_id
+            JOIN sites s
+                ON s.id = ss.site_id
+            JOIN teams t
+                ON t.id = s.team_id
+            WHERE t.name = $4 AND s.name = $5 AND ss.name = $6 AND tr.name = $7
+            ON CONFLICT (tree_id, name) DO NOTHING
+            RETURNING name;
+            ",
+        )
+        .bind(tree_revision.created_time)
+        .bind(tree_revision.name.resource())
+        .bind(tree_revision.status)
+        .bind(
+            tree_revision
+                .name
+                .parent()
+                .parent()
+                .parent()
+                .parent()
+                .resource(),
+        )
+        .bind(tree_revision.name.parent().parent().parent().resource())
+        .bind(tree_revision.name.parent().parent().resource())
+        .bind(tree_revision.name.parent().resource())
+        .fetch_optional(&mut tx)
+        .await
+        .context("inserting tree revision")?;
+
+        // TODO: handle version conflicts on commit.
+        tx.commit().await?;
+
+        if let Some(_name) = name {
+            Ok(Some(tree_revision))
+        } else {
+            Ok(None)
+        }
     }
 }
