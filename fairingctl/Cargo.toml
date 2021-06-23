@@ -8,12 +8,16 @@ edition = "2018"
 
 [dependencies]
 anyhow = "1"
+base64 = "0.13"
 clap = "2"
+directories = "3"
 fairing-core = { path = "../fairing-core" }
 fairing-proto = { path = "../fairing-proto" }
+keyring = "0.10"
+serde = { version = "1", features = ["derive"] }
 termion = "1"
 tokio = { version = "1", features = ["macros", "rt"] }
+toml = "0.5"
 tonic = { git = "https://github.com/hyperium/tonic" }
 tracing = "0.1"
 tracing-subscriber = "0.2"
-base64 = "0.13"

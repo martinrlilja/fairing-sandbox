@@ -2,6 +2,8 @@ use anyhow::Result;
 use clap::{crate_version, App, AppSettings, Arg, ArgMatches, SubCommand};
 use tonic::{metadata::MetadataValue, transport::Channel, Request};
 
+mod config;
+
 #[tokio::main(flavor = "current_thread")]
 async fn main() -> Result<()> {
     let matches = App::new("fairingctl")
@@ -98,8 +100,8 @@ async fn command_users(matches: &ArgMatches<'_>) -> Result<()> {
             .await?;
 
     if let Some(_matches) = matches.subcommand_matches("create") {
-        stdout.write_all(b"Username: ").unwrap();
-        stdout.flush().unwrap();
+        stdout.write_all(b"Username: ")?;
+        stdout.flush()?;
 
         let username = stdin.read_line()?;
         let username = match username {
@@ -120,12 +122,53 @@ async fn command_users(matches: &ArgMatches<'_>) -> Result<()> {
 
         let response = users_client
             .create_user(fairing_proto::users::v1beta1::CreateUserRequest {
-                resource_id: username,
-                password,
+                resource_id: username.clone(),
+                password: password.clone(),
             })
             .await?;
 
         println!("New user: {}", response.get_ref().name);
+
+        stdout.write_all(b"Do you want to save this user and use it as default? (Y/n) ")?;
+        stdout.flush()?;
+
+        let save_user = stdin.read_line()?;
+        if let Some(save_user) = save_user {
+            if save_user.is_empty()
+                || save_user.eq_ignore_ascii_case("y")
+                || save_user.eq_ignore_ascii_case("yes")
+            {
+                config::read_default()
+                    .await?
+                    .save_user(&username, &password)
+                    .await?;
+            }
+        }
+    } else if let Some(_matches) = matches.subcommand_matches("login") {
+        stdout.write_all(b"Username: ").unwrap();
+        stdout.flush().unwrap();
+
+        let username = stdin.read_line()?;
+        let username = match username {
+            Some(username) => username,
+            None => return Ok(()),
+        };
+
+        stdout.write_all(b"Password: ").unwrap();
+        stdout.flush().unwrap();
+
+        let password = stdin.read_passwd(&mut stdout)?;
+        let password = match password {
+            Some(password) => password,
+            None => return Ok(()),
+        };
+
+        println!();
+
+        config::read_default()
+            .await?
+            .save_user(&username, &password)
+            .await?;
     }
 
     Ok(())
@@ -137,6 +180,7 @@ async fn command_teams(matches: &ArgMatches<'_>) -> Result<()> {
     };
 
     let channel = Channel::from_static("http://[::1]:8000").connect().await?;
+    let auth = auth().await?;
 
     let mut teams_client = TeamsClient::with_interceptor(channel, auth);
 
@@ -176,6 +220,7 @@ async fn command_sites(matches: &ArgMatches<'_>) -> Result<()> {
     };
 
     let channel = Channel::from_static("http://[::1]:8000").connect().await?;
+    let auth = auth().await?;
 
     let mut sites_client = SitesClient::with_interceptor(channel, auth);
 
@@ -255,21 +300,21 @@ async fn command_sites(matches: &ArgMatches<'_>) -> Result<()> {
     Ok(())
 }
 
-fn auth(mut req: Request<()>) -> Result<Request<()>, tonic::Status> {
-    let user = std::env::var("FAIRING_USER");
-    let password = std::env::var("FAIRING_PASSWORD");
+async fn auth() -> Result<tonic::Interceptor> {
+    let config = config::read_default().await?;
 
-    match (user, password) {
-        (Ok(user), Ok(password)) => {
+    let (user, password) = config.get_user(None).await.unwrap();
+
+    Ok(tonic::Interceptor::from(
+        move |mut req: Request<()>| -> Result<Request<()>, tonic::Status> {
             let token = base64::encode_config(format!("{}:{}", user, password), base64::URL_SAFE);
             let token = format!("Basic {}", token);
             let token =
                 MetadataValue::from_str(&token).expect("failed to create authorization token");
 
             req.metadata_mut().insert("authorization", token);
-        }
-        _ => println!("Missing FAIRING_USER or FAIRING_PASSWORD environment variables."),
-    }
 
-    Ok(req)
+            Ok(req)
+        },
+    ))
 }
