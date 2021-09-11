@@ -1,11 +1,13 @@
-use anyhow::{anyhow, Result};
+use anyhow::{anyhow, Context, Result};
 use directories::ProjectDirs;
 use std::path::PathBuf;
+use tokio::fs;
 
 const QUALIFIER: &str = "io";
 const ORGANIZATION: &str = "Fairing";
 const APPLICATION: &str = "fairingctl";
 const CONFIG_FILE: &str = "config.toml";
+const CONFIG_FILE_TEMP: &str = "config.toml~";
 
 #[derive(Clone, Debug, Default, serde::Deserialize, serde::Serialize)]
 pub struct Config {
@@ -48,13 +50,36 @@ impl Config {
     }
 
     pub async fn save(&self) -> Result<()> {
+        use tokio::io::AsyncWriteExt;
+
         if let Some(config_file_path) = get_config_file_path() {
-            let buffer = toml::to_vec(&self)?;
+            let buffer = toml::to_vec(&self).context("serializing config")?;
 
             let dir = config_file_path.parent().unwrap();
-            tokio::fs::create_dir(dir).await?;
+            fs::create_dir_all(dir)
+                .await
+                .context("creating config dir")?;
 
-            tokio::fs::write(config_file_path, &buffer).await?;
+            let mut temp_path = dir.to_owned();
+            temp_path.push(CONFIG_FILE_TEMP);
+
+            let mut file = fs::OpenOptions::new()
+                .create(true)
+                .write(true)
+                .truncate(true)
+                .open(&temp_path)
+                .await?;
+
+            file.write_all(&buffer)
+                .await
+                .context("writing temp config")?;
+
+            file.flush().await.context("flushing temp config")?;
+
+            fs::rename(&temp_path, config_file_path)
+                .await
+                .context("moving temp config")?;
+
             Ok(())
         } else {
             Err(anyhow!(
@@ -79,7 +104,7 @@ pub async fn read_default() -> Result<Config> {
                 Ok(config)
             }
             Err(err) if err.kind() == ErrorKind::NotFound => Ok(Config::default()),
-            Err(err) => Err(err)?,
+            Err(err) => Err(err).context("reading config")?,
         }
     } else {
         tracing::warn!("there is no default location for the config file on this platform");
