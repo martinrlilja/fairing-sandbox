@@ -20,42 +20,6 @@ CREATE TABLE team_members (
     PRIMARY KEY (team_id, user_id)
 );
 
--- Global blob storage
-CREATE TABLE blobs (
-    checksum BYTEA PRIMARY KEY,
-    created_time TIMESTAMPTZ NOT NULL,
-
-    storage_id SMALLINT NOT NULL,
-    "size" INTEGER NOT NULL,
-    size_on_disk INTEGER NOT NULL,
-
-    compression_algorithm SMALLINT,
-    compression_level SMALLINT
-);
-
--- File storage
-CREATE TABLE files (
-    team_id UUID REFERENCES teams (id) ON DELETE CASCADE NOT NULL,
-    checksum BYTEA NOT NULL,
-    "size" BIGINT NOT NULL,
-
-    is_valid_utf8 BOOLEAN NOT NULL,
-
-    PRIMARY KEY (team_id, checksum)
-);
-
-CREATE TABLE file_chunks (
-    team_id UUID NOT NULL,
-    file_checksum BYTEA NOT NULL,
-    start_byte_offset BIGINT NOT NULL,
-    end_byte_offset BIGINT NOT NULL,
-
-    blob_checksum BYTEA REFERENCES blobs (checksum) ON DELETE RESTRICT NOT NULL,
-
-    PRIMARY KEY (team_id, file_checksum, start_byte_offset, end_byte_offset),
-    FOREIGN KEY (team_id, file_checksum) REFERENCES files (team_id, checksum) ON DELETE CASCADE
-);
-
 -- Sites
 CREATE TABLE sites (
     id UUID PRIMARY KEY,
@@ -114,7 +78,7 @@ CREATE TABLE trees (
 CREATE TYPE tree_revision_status AS ENUM (
     'ignore',
     'fetch',
-    'fetch_draft',
+    'build',
     'draft',
     'complete'
 );
@@ -131,16 +95,15 @@ CREATE TABLE tree_revisions (
     UNIQUE (tree_id, name)
 );
 
-CREATE TABLE tree_leaves (
+-- Build
+CREATE TABLE builds (
+    id UUID PRIMARY KEY,
+    created_time TIMESTAMPTZ NOT NULL,
+    name TEXT NOT NULL,
+
     tree_id UUID REFERENCES trees (id) ON DELETE CASCADE NOT NULL,
-    path TEXT NOT NULL,
-    version BIGINT NOT NULL,
 
-    team_id UUID,
-    file_checksum BYTEA,
-
-    PRIMARY KEY (tree_id, path, version),
-    FOREIGN KEY (team_id, file_checksum) REFERENCES files (team_id, checksum) ON DELETE CASCADE
+    log_output TEXT NOT NULL
 );
 
 -- Deployments
@@ -168,3 +131,55 @@ CREATE TABLE deployments (
 );
 
 ALTER TABLE sites ADD current_deployment_id UUID REFERENCES deployments (id) ON DELETE SET NULL;
+
+-- File storage
+CREATE TABLE file_keyspace (
+    id UUID PRIMARY KEY,
+    key BYTEA NOT NULL
+);
+
+CREATE TABLE blobs (
+    checksum BYTEA PRIMARY KEY,
+
+    storage_id SMALLINT NOT NULL,
+    "size" INTEGER NOT NULL,
+    size_on_disk INTEGER NOT NULL,
+
+    compression_algorithm SMALLINT,
+    compression_level SMALLINT
+);
+
+CREATE TABLE files (
+    file_keyspace UUID REFERENCES file_keyspace (id) ON DELETE CASCADE NOT NULL,
+    checksum BYTEA NOT NULL,
+    "size" BIGINT NOT NULL,
+
+    is_valid_utf8 BOOLEAN NOT NULL,
+
+    PRIMARY KEY (file_keyspace, checksum)
+);
+
+CREATE TABLE file_chunks (
+    file_keyspace UUID NOT NULL,
+    file_checksum BYTEA NOT NULL,
+    start_byte_offset BIGINT NOT NULL,
+    end_byte_offset BIGINT NOT NULL,
+
+    blob_checksum BYTEA REFERENCES blobs (checksum) ON DELETE RESTRICT NOT NULL,
+
+    PRIMARY KEY (file_keyspace, file_checksum, start_byte_offset, end_byte_offset),
+    FOREIGN KEY (file_keyspace, file_checksum) REFERENCES files (file_keyspace, checksum) ON DELETE CASCADE
+);
+
+CREATE TABLE tree_leaves (
+    tree_id UUID NOT NULL,
+    version BIGINT NOT NULL,
+    path TEXT NOT NULL,
+
+    file_keyspace UUID,
+    file_checksum BYTEA,
+
+    PRIMARY KEY (tree_id, path, version),
+    FOREIGN KEY (tree_id, version) REFERENCES tree_revisions (tree_id, version) ON DELETE CASCADE,
+    FOREIGN KEY (file_keyspace, file_checksum) REFERENCES files (file_keyspace, checksum) ON DELETE CASCADE
+);

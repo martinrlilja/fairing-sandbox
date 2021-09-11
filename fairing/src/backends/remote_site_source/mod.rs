@@ -34,4 +34,20 @@ impl remote_site_source::RemoteSiteSourceRepository for GenericRemoteSiteSource 
             None => Err(anyhow!("unknown site source kind")),
         }
     }
+
+    async fn fetch<'n>(
+        &self,
+        site_source: &models::SiteSource,
+        fetch_tree_revision: &models::TreeRevisionName<'n>,
+    ) -> Result<()> {
+        match site_source.kind {
+            Some(models::SiteSourceKind::GitSource(ref git_source)) => {
+                let remote_site_source = git::GitRemoteSiteSource;
+                remote_site_source
+                    .fetch(site_source, git_source, fetch_tree_revision)
+                    .await
+            }
+            None => Err(anyhow!("unknown site source kind")),
+        }
+    }
 }

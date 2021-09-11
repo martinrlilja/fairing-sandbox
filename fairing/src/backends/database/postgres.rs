@@ -3,13 +3,13 @@ use std::sync::Arc;
 use uuid::Uuid;
 
 use fairing_core::{
-    backends::database,
+    backends::{build_queue, database, file_metadata},
     models::{self, prelude::*},
 };
 
-#[derive(Debug)]
+#[derive(Clone, Debug)]
 pub struct PostgresDatabase {
-    pool: sqlx::PgPool,
+    pub(crate) pool: sqlx::PgPool,
 }
 
 impl PostgresDatabase {
@@ -20,8 +20,16 @@ impl PostgresDatabase {
         Ok(PostgresDatabase { pool })
     }
 
-    pub fn into_database(self) -> database::Database {
-        Arc::new(self)
+    pub fn build_queue(&self) -> build_queue::BuildQueue {
+        Arc::new(self.clone())
+    }
+
+    pub fn database(&self) -> database::Database {
+        Arc::new(self.clone())
+    }
+
+    pub fn file_metadata(&self) -> file_metadata::FileMetadata {
+        Arc::new(self.clone())
     }
 
     pub async fn migrate(&self) -> Result<()> {

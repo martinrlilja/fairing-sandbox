@@ -15,4 +15,10 @@ pub trait RemoteSiteSourceRepository: Send + Sync {
         &self,
         site_source: &models::SiteSource,
     ) -> Result<Vec<models::CreateTreeRevision>>;
+
+    async fn fetch<'n>(
+        &self,
+        site_source: &models::SiteSource,
+        fetch_tree_revision: &models::TreeRevisionName<'n>,
+    ) -> Result<()>;
 }

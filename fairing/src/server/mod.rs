@@ -16,7 +16,7 @@ mod sites;
 mod teams;
 mod users;
 
-pub async fn api_server(database: &Database, addr: SocketAddr) -> Result<(), Error> {
+pub async fn api_server(database: Database, addr: SocketAddr) -> Result<(), Error> {
     let web_config = tonic_web::config();
     let auth = AuthInterceptor::new(&database);
 

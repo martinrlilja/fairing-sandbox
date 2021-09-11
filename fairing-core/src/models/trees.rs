@@ -30,6 +30,9 @@ impl<'n> ParentedResourceName<'n> for TreeRevisionName<'n> {
     type Parent = models::TreeName<'static>;
 }
 
+#[derive(Copy, Clone, Debug)]
+pub struct TreeId(pub uuid::Uuid);
+
 #[derive(sqlx::FromRow)]
 pub struct Tree {
     pub name: TreeName<'static>,
@@ -70,7 +73,7 @@ pub struct TreeRevision {
 pub enum TreeRevisionStatus {
     Ignore,
     Fetch,
-    FetchDraft,
+    Build,
     Draft,
     Complete,
 }

@@ -1,5 +1,7 @@
 use anyhow::Result;
-use clap::{crate_version, App, AppSettings, Arg, SubCommand};
+use clap::{crate_version, App, AppSettings, SubCommand};
+use fairing_core::services::{BuildServiceBuilder, Storage};
+use tokio::task;
 
 mod backends;
 mod server;
@@ -23,10 +25,27 @@ async fn main() -> Result<()> {
         let database =
             backends::PostgresDatabase::connect("psql://postgres:password@localhost:5432/postgres")
                 .await?;
-
         database.migrate().await?;
 
-        let database = database.into_database();
+        let file_storage = backends::LocalFileStorage::open(".data").await?;
+
+        let remote_site_source = backends::GenericRemoteSiteSource::new();
+
+        let storage = Storage::new(file_storage, database.file_metadata());
+
+        let build_service = BuildServiceBuilder::new().concurrent_builds(4).build(
+            database.build_queue(),
+            database.database(),
+            remote_site_source,
+            storage.clone(),
+        );
+
+        task::spawn(async move {
+            let res = build_service.run().await;
+            if let Err(err) = res {
+                tracing::error!("build service: {:?}", err);
+            }
+        });
 
         tracing::info!("starting server");
 
@@ -34,7 +53,7 @@ async fn main() -> Result<()> {
 
         tracing::info!("server listening on {}", addr);
 
-        server::api_server(&database, addr).await?;
+        server::api_server(database.database(), addr).await?;
     }
 
     Ok(())
