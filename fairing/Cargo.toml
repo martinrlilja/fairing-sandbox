@@ -10,6 +10,7 @@ edition = "2018"
 anyhow = "1"
 async-stream = "0.3"
 async-trait = "0.1"
+async-compression = { version = "0.3", features = ["zlib", "tokio"] }
 base64 = "0.13"
 bincode = "1"
 bytes = "1"
