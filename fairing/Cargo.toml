@@ -20,6 +20,7 @@ fairing-proto = { path = "../fairing-proto" }
 futures = "0.3"
 hyper = "0.14"
 miniz_oxide = "0.4"
+memmap = "0.7"
 nom = "7"
 rocksdb = { version = "0.17", default-features = false }
 serde = { version = "1", features = ["derive"] }

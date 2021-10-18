@@ -2,16 +2,25 @@ use anyhow::{anyhow, Result};
 
 use fairing_core::models::{self, prelude::*};
 
-use pack_file_reader::GitPackFileReader;
+use git_pack_file_reader::GitPackFileReader;
 use pkt_line_reader::{GitPktLineOutput, GitPktLineReader};
 use ssh::{SshClient, SshClientConfig, SshReader};
+use parsers::PackFileObjectType;
 
-mod pack_file_reader;
+mod git_pack_file_reader;
+mod local_pack_file_reader;
 mod parsers;
 mod pkt_line_reader;
 mod ssh;
 
 const REVISION_LIMIT: usize = 4096;
+
+#[derive(Copy, Clone, Debug, serde::Serialize, serde::Deserialize)]
+pub struct IndexObject {
+    type_: PackFileObjectType,
+    offset: u64,
+    length: u64,
+}
 
 pub struct GitRemoteSiteSource;
 
@@ -114,11 +123,15 @@ impl GitRemoteSiteSource {
             }
         }
 
-        let mut reader = GitPackFileReader::open(".").await?;
+        let path = ".";
+
+        let mut reader = GitPackFileReader::open(path).await?;
 
         while let Some(Some(())) = client.read(&mut reader).await? {}
 
-        reader.extract().await?;
+        reader.flush().await?;
+
+        local_pack_file_reader::extract(path, "./build").await?;
 
         client.disconnect().await?;
 
