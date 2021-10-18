@@ -1,5 +1,4 @@
 use anyhow::{anyhow, Result};
-use tokio::io::{AsyncReadExt, AsyncWriteExt};
 
 use fairing_core::models::{self, prelude::*};
 
@@ -119,7 +118,7 @@ impl GitRemoteSiteSource {
 
         while let Some(Some(())) = client.read(&mut reader).await? {}
 
-        reader.flush().await?;
+        reader.extract().await?;
 
         client.disconnect().await?;
 

@@ -1,16 +1,15 @@
-use anyhow::{anyhow, ensure, Context, Result};
-use async_compression::tokio::{bufread::ZlibDecoder, write::ZlibEncoder};
+use anyhow::{anyhow, Context, Result};
+use async_compression::tokio::write::ZlibEncoder;
 use miniz_oxide::inflate::stream::InflateState;
 use sha1::{Digest, Sha1};
 use std::{
-    convert::TryInto,
     io::SeekFrom,
     path::{Path, PathBuf},
     sync::Arc,
 };
 use tokio::{
     fs,
-    io::{AsyncRead, AsyncReadExt, AsyncSeek, AsyncSeekExt, AsyncWriteExt, BufReader},
+    io::{AsyncRead, AsyncReadExt, AsyncSeek, AsyncSeekExt, AsyncWrite, AsyncWriteExt},
     task,
 };
 
@@ -68,212 +67,48 @@ impl GitPackFileReader {
         })
     }
 
-    pub async fn flush(mut self) -> Result<()> {
-        let mut pack_delta_file = fs::OpenOptions::new()
-            .read(true)
-            .open(self.path.join("pack"))
+    pub async fn extract(mut self) -> Result<()> {
+        let mut pack_file_delta = LocalPackFileReader::open(self.path.join("pack"))
             .await
             .context("opening pack file for delta")?;
 
-        let mut pack_parent_file = fs::OpenOptions::new()
-            .read(true)
-            .open(self.path.join("pack"))
+        let mut pack_file_parent = LocalPackFileReader::open(self.path.join("pack"))
             .await
             .context("opening pack file for parent")?;
-
-        let mut pack_delta_buffer = Vec::with_capacity(8192);
-        let mut pack_parent_buffer = Vec::with_capacity(8192);
-
-        let mut sha1_hasher = Sha1::new();
 
         let ref_deltas = self
             .list_ref_deltas(None)
             .await
             .context("listing ref deltas")?;
+
         for (_key, ref_delta, parent) in ref_deltas {
-            pack_delta_file
-                .seek(SeekFrom::Start(ref_delta.file_offset))
+            pack_file_delta
+                .seek(&ref_delta, 0)
                 .await
                 .context("seek in pack file for delta")?;
-            let mut pack_delta = ZlibDecoder::new(BufReader::new(pack_delta_file));
-            pack_delta.multiple_members(true);
 
             let pack_original_length = self.pack.metadata().await?.len();
 
-            let mut pack = ZlibEncoder::new(self.pack);
-            let mut reconstructed_length: Option<u64> = None;
-            let mut read_bytes = 0u64;
-            let mut written_bytes = 0u64;
+            let pack_file = ZlibEncoder::new(self.pack);
 
-            loop {
-                pack_delta
-                    .read_buf(&mut pack_delta_buffer)
-                    .await
-                    .context("reading delta")?;
+            let mut parser = RefDeltaParser {
+                reconstructed_length: None,
+                parent: &parent,
+                pack_file,
+                pack_file_parent,
+                sha1_hasher: Sha1::new(),
+                written_bytes: 0,
+            };
 
-                let reconstructed_length = if let Some(reconstructed_length) = reconstructed_length
-                {
-                    reconstructed_length
-                } else {
-                    let chunk_len: u64 = pack_delta_buffer.len().try_into().unwrap();
-                    let chunk_limit = chunk_len.min(ref_delta.decompressed_length - read_bytes);
-                    let delta_chunk = &pack_delta_buffer[..chunk_limit.try_into().unwrap()];
-                    let header = pack_file_variable_length(delta_chunk)
-                        .and_then(|(input, _)| pack_file_variable_length(input));
+            while let Some(()) = pack_file_delta.parse(&ref_delta, .., &mut parser).await? {}
 
-                    match header {
-                        Ok((input, reconstructed_length_)) => {
-                            match parent.type_ {
-                                PackFileObjectType::Commit => sha1_hasher.update(b"commit"),
-                                PackFileObjectType::Tree => sha1_hasher.update(b"tree"),
-                                PackFileObjectType::Blob => sha1_hasher.update(b"blob"),
-                                PackFileObjectType::Tag => sha1_hasher.update(b"tag"),
-                                PackFileObjectType::RefDelta { .. } => Err(anyhow!(
-                                    "ref delta can not have another ref delta as a parent"
-                                ))?,
-                            }
-
-                            let length_header = format!(" {}\0", reconstructed_length_);
-                            sha1_hasher.update(length_header.as_bytes());
-
-                            let read_length = delta_chunk.len() - input.len();
-                            let unread_length = input.len();
-                            pack_delta_buffer.copy_within(read_length.., 0);
-                            pack_delta_buffer.truncate(unread_length);
-
-                            read_bytes += read_length as u64;
-
-                            reconstructed_length = Some(reconstructed_length_);
-                            reconstructed_length_
-                        }
-                        Err(nom::Err::Incomplete(_)) => continue,
-                        Err(err) => Err(anyhow!("error parsing delta header: {:?}", err))?,
-                    }
-                };
-
-                loop {
-                    let delta_chunk_len: u64 = pack_delta_buffer.len().try_into().unwrap();
-
-                    tracing::trace!("{}/{}", read_bytes, ref_delta.decompressed_length);
-
-                    if ref_delta.decompressed_length <= read_bytes {
-                        break;
-                    }
-
-                    let delta_chunk_limit =
-                        delta_chunk_len.min(ref_delta.decompressed_length - read_bytes);
-
-                    let delta_chunk = &pack_delta_buffer[..delta_chunk_limit.try_into().unwrap()];
-
-                    let instruction = delta_instruction(delta_chunk);
-
-                    match instruction {
-                        Ok((input, instruction)) => {
-                            match instruction {
-                                DeltaInstruction::InsertData(data) => {
-                                    pack.write_all(data).await.context("writing to pack file")?;
-                                    sha1_hasher.update(data);
-                                    written_bytes += data.len() as u64;
-                                }
-                                DeltaInstruction::CopyFromParent {
-                                    mut offset,
-                                    mut length,
-                                } => {
-                                    pack_parent_file
-                                        .seek(SeekFrom::Start(parent.file_offset))
-                                        .await
-                                        .context("seek in pack file for parent")?;
-                                    let mut pack_parent =
-                                        ZlibDecoder::new(BufReader::new(pack_parent_file));
-                                    pack_parent.multiple_members(true);
-
-                                    ensure!(
-                                        offset + length <= parent.decompressed_length,
-                                        "offset ({}) and length ({}) outside of parent length ({})",
-                                        offset,
-                                        length,
-                                        parent.decompressed_length
-                                    );
-
-                                    while offset != 0 || length != 0 {
-                                        pack_parent
-                                            .read_buf(&mut pack_parent_buffer)
-                                            .await
-                                            .context("reading parent")?;
-
-                                        let parent_chunk_len: u64 =
-                                            pack_parent_buffer.len().try_into().unwrap();
-
-                                        tracing::trace!(
-                                            "chunk {}/{} at {}",
-                                            parent_chunk_len,
-                                            length,
-                                            offset
-                                        );
-
-                                        if offset >= parent_chunk_len {
-                                            offset -= parent_chunk_len;
-                                        } else {
-                                            // Make sure this is within range of usize.
-                                            let parent_chunk_len =
-                                                (parent_chunk_len - offset).min(length);
-                                            let parent_chunk = &pack_parent_buffer[offset as usize
-                                                ..(offset + parent_chunk_len) as usize];
-                                            pack.write_all(parent_chunk)
-                                                .await
-                                                .context("writing to pack file")?;
-                                            sha1_hasher.update(parent_chunk);
-
-                                            written_bytes += parent_chunk_len;
-                                            length -= parent_chunk_len;
-                                            offset = 0;
-                                        }
-
-                                        pack_parent_buffer.truncate(0);
-                                    }
-
-                                    pack_parent_file = pack_parent.into_inner().into_inner();
-                                }
-                            }
-
-                            let read_length = delta_chunk.len() - input.len();
-                            // TODO: should this use the pack_delta_buffer length?
-                            let unread_length = input.len();
-                            pack_delta_buffer.copy_within(read_length.., 0);
-                            pack_delta_buffer.truncate(unread_length);
-                            read_bytes += read_length as u64;
-                        }
-                        Err(nom::Err::Incomplete(_)) => break,
-                        Err(err) => Err(anyhow!("error parsing delta instruction: {:?}", err))?,
-                    }
-
-                    // Sanity check, replace with a limit on the whole packfile.
-                    ensure!(written_bytes < 1_000_000_000);
-                }
-
-                if ref_delta.decompressed_length <= read_bytes {
-                    ensure!(
-                        read_bytes == ref_delta.decompressed_length,
-                        "read bytes ({}) != expected length ({})",
-                        read_bytes,
-                        ref_delta.decompressed_length
-                    );
-                    ensure!(
-                        written_bytes == reconstructed_length,
-                        "written bytes ({}) != expected length ({}))",
-                        written_bytes,
-                        reconstructed_length
-                    );
-                    break;
-                }
-            }
-
-            pack.shutdown().await?;
-            self.pack = pack.into_inner();
+            parser.pack_file.shutdown().await?;
+            self.pack = parser.pack_file.into_inner();
+            pack_file_parent = parser.pack_file_parent;
 
             let sha1_hash = {
                 let mut sha1_hash = [0u8; 20];
-                let output = sha1_hasher.finalize_reset();
+                let output = parser.sha1_hasher.finalize_reset();
                 sha1_hash.copy_from_slice(&output);
                 sha1_hash
             };
@@ -282,18 +117,13 @@ impl GitPackFileReader {
                 type_: parent.type_,
                 file_offset: self.next_object_file_offset,
                 compressed_length: self.pack.metadata().await?.len() - pack_original_length,
-                decompressed_length: written_bytes,
+                decompressed_length: parser.written_bytes,
             })?;
 
             tracing::trace!("writing object {:?} to index", sha1_hash);
 
             let index = self.index.clone();
             task::spawn_blocking(move || index.put(&sha1_hash, value)).await??;
-
-            pack_delta_file = pack_delta.into_inner().into_inner();
-
-            pack_delta_buffer.truncate(0);
-            pack_parent_buffer.truncate(0);
         }
 
         let index = self.index.clone();
@@ -343,6 +173,105 @@ impl GitPackFileReader {
     }
 }
 
+struct RefDeltaParser<'p, R, W> {
+    reconstructed_length: Option<u64>,
+    parent: &'p IndexObject,
+    pack_file: ZlibEncoder<W>,
+    pack_file_parent: LocalPackFileReader<R>,
+    sha1_hasher: Sha1,
+    written_bytes: u64,
+}
+
+#[async_trait::async_trait]
+impl<'p, R, W> LocalPackFileParser for RefDeltaParser<'p, R, W>
+where
+    R: AsyncRead + AsyncSeek + Unpin + Send,
+    W: AsyncWrite + AsyncSeek + Unpin + Send,
+{
+    type Output = ();
+
+    async fn parse<'a>(&mut self, input: &'a [u8]) -> nom::IResult<&'a [u8], Self::Output> {
+        use nom::error::{Error, ErrorKind};
+
+        let input = if let Some(_) = self.reconstructed_length {
+            input
+        } else {
+            let (input, reconstructed_length) = pack_file_variable_length(input)
+                .and_then(|(input, _)| pack_file_variable_length(input))?;
+
+            match self.parent.type_ {
+                PackFileObjectType::Commit => self.sha1_hasher.update(b"commit"),
+                PackFileObjectType::Tree => self.sha1_hasher.update(b"tree"),
+                PackFileObjectType::Blob => self.sha1_hasher.update(b"blob"),
+                PackFileObjectType::Tag => self.sha1_hasher.update(b"tag"),
+                PackFileObjectType::RefDelta { .. } => {
+                    tracing::trace!("ref delta can not have another ref delta as a parent");
+                    return Err(nom::Err::Failure(Error::new(input, ErrorKind::Tag)));
+                }
+            }
+
+            let length_header = format!(" {}\0", reconstructed_length);
+            self.sha1_hasher.update(length_header.as_bytes());
+
+            self.reconstructed_length = Some(reconstructed_length);
+            input
+        };
+
+        let (input, instruction) = delta_instruction(input)?;
+
+        match instruction {
+            DeltaInstruction::InsertData(data) => {
+                self.pack_file
+                    .write_all(data)
+                    .await
+                    .expect("writing to pack file");
+                self.sha1_hasher.update(data);
+                self.written_bytes += data.len() as u64;
+            }
+            DeltaInstruction::CopyFromParent { offset, length } => {
+                tracing::debug!("copy from parent: {}/{}", offset, length);
+                self.pack_file_parent
+                    .seek(self.parent, offset)
+                    .await
+                    .expect("seek in pack file for parent");
+
+                assert!(
+                    offset + length <= self.parent.decompressed_length,
+                    "offset ({}) and length ({}) outside of parent length ({})",
+                    offset,
+                    length,
+                    self.parent.decompressed_length
+                );
+
+                while let Some(parent_data) = self
+                    .pack_file_parent
+                    .read_bytes(self.parent, offset..offset + length)
+                    .await
+                    .expect("reading parent")
+                {
+                    self.pack_file
+                        .write_all(parent_data)
+                        .await
+                        .expect("writing to pack file");
+
+                    self.sha1_hasher.update(parent_data);
+
+                    let consumed_bytes = parent_data.len();
+
+                    self.written_bytes += consumed_bytes as u64;
+                    self.pack_file_parent.advance(
+                        self.parent,
+                        offset..offset + length,
+                        consumed_bytes,
+                    );
+                }
+            }
+        }
+
+        Ok((input, ()))
+    }
+}
+
 #[async_trait::async_trait]
 impl SshReader for GitPackFileReader {
     type Output = Option<()>;
@@ -370,7 +299,7 @@ impl SshReader for GitPackFileReader {
 
             let data_to_write = &input[..input.len() - rest.len()];
 
-            tracing::trace!("writing {} bytes to pack", data_to_write.len());
+            tracing::debug!("writing {} bytes to pack", data_to_write.len());
 
             self.pack.write_all(data_to_write).await.unwrap();
 
@@ -385,7 +314,7 @@ impl SshReader for GitPackFileReader {
                 })
                 .unwrap();
 
-                tracing::trace!("writing object {:?} to index", decoded_object.sha1_hash);
+                tracing::debug!("writing object {:?} to index", decoded_object.sha1_hash);
 
                 let index = self.index.clone();
                 task::spawn_blocking(move || index.put(&key, value))
@@ -400,7 +329,7 @@ impl SshReader for GitPackFileReader {
 
             if self.next_object_index == header.objects {
                 // We have read all the objects we expected to read.
-                tracing::trace!("read all {} objects", header.objects);
+                tracing::debug!("read all {} objects", header.objects);
                 Ok((rest, None))
             } else {
                 Ok((rest, Some(())))
@@ -408,7 +337,7 @@ impl SshReader for GitPackFileReader {
         } else {
             let (input, object_header) = pack_file_object_header(input)?;
 
-            tracing::trace!("current_object: {:?}", object_header);
+            tracing::debug!("current_object: {:?}", object_header);
 
             self.current_object = Some(object_header);
 
@@ -523,10 +452,7 @@ impl ObjectDecoder {
 pub trait LocalPackFileParser {
     type Output;
 
-    async fn parse<'a>(
-        &mut self,
-        input: &'a [u8],
-    ) -> nom::IResult<&'a [u8], Self::Output>;
+    async fn parse<'a>(&mut self, input: &'a [u8]) -> nom::IResult<&'a [u8], Self::Output>;
 }
 
 struct LocalPackFileReader<Reader> {
@@ -537,6 +463,7 @@ struct LocalPackFileReader<Reader> {
     input_buffer: Vec<u8>,
     output_buffer: Vec<u8>,
     output_buffer_offset: usize,
+    current_object: u64,
 }
 
 impl LocalPackFileReader<fs::File> {
@@ -569,6 +496,7 @@ where
             input_buffer,
             output_buffer,
             output_buffer_offset: 0,
+            current_object: 0,
         }
     }
 
@@ -604,16 +532,48 @@ where
         }
     }
 
+    fn output_buffer_range(&self) -> (u64, u64) {
+        let output_start = self.inflate_offset - self.output_buffer_offset as u64;
+        let output_end = self.inflate_offset;
+        (output_start, output_end)
+    }
+
+    fn slice_output_buffer_range(
+        &self,
+        object: &IndexObject,
+        range: impl std::ops::RangeBounds<u64> + Clone,
+    ) -> Option<(usize, usize)> {
+        let start_offset = self.start_offset(&object, range.clone());
+        let end_offset = self.end_offset(&object, range.clone());
+
+        let (output_start, output_end) = self.output_buffer_range();
+
+        if start_offset >= output_end {
+            Some((0, 0))
+        } else if end_offset <= output_start {
+            None
+        } else {
+            let slice_start = start_offset.max(output_start);
+            let slice_end = end_offset.min(output_end);
+
+            let slice_start_in_output_buffer = slice_start - output_start;
+            let slice_end_in_output_buffer = slice_end - output_start;
+
+            Some((
+                slice_start_in_output_buffer as usize,
+                slice_end_in_output_buffer as usize,
+            ))
+        }
+    }
+
     async fn seek(&mut self, object: &IndexObject, start_offset: u64) -> Result<()> {
         use miniz_oxide::DataFormat;
 
-        let object_end = object.file_offset + object.compressed_length;
-        let buffer_start = self.inflate_offset - self.output_buffer_offset as u64;
+        let (output_start, _) = self.output_buffer_range();
 
-        if self.pack_offset < object.file_offset
-            || self.pack_offset > object_end
-            || buffer_start > start_offset
-        {
+        if self.current_object != object.file_offset || output_start > start_offset {
+            self.current_object = object.file_offset;
+
             self.pack_offset = object.file_offset;
             self.pack.seek(SeekFrom::Start(self.pack_offset)).await?;
 
@@ -627,66 +587,32 @@ where
         Ok(())
     }
 
-    async fn read<'a>(
-        &'a mut self,
-        object: &IndexObject,
-        range: impl std::ops::RangeBounds<u64> + Clone,
-    ) -> Result<Option<(usize, usize)>> {
-        use miniz_oxide::{inflate::stream::inflate, DataFormat, MZError, MZFlush};
+    async fn read<'a>(&'a mut self, object: &IndexObject) -> Result<()> {
+        use miniz_oxide::{inflate::stream::inflate, MZError, MZFlush};
 
-        let start_offset = self.start_offset(&object, range.clone());
-        let end_offset = self.end_offset(&object, range.clone());
+        assert_eq!(object.file_offset, self.current_object);
 
-        let object_end = object.file_offset + object.compressed_length;
+        self.pack.read_buf(&mut self.input_buffer).await?;
 
-        if self.pack_offset <= object.file_offset || self.pack_offset > object_end {
-            self.pack_offset = object.file_offset;
-            self.pack.seek(SeekFrom::Start(self.pack_offset)).await?;
+        let result = inflate(
+            &mut self.inflate_state,
+            &self.input_buffer,
+            &mut self.output_buffer[self.output_buffer_offset..],
+            MZFlush::None,
+        );
 
-            self.inflate_state.reset(DataFormat::Zlib);
-            self.inflate_offset = 0;
+        self.input_buffer.copy_within(result.bytes_consumed.., 0);
+        self.input_buffer
+            .truncate(self.input_buffer.len() - result.bytes_consumed);
 
-            self.input_buffer.clear();
-            self.output_buffer_offset = 0;
-        }
+        self.pack_offset += result.bytes_consumed as u64;
+        self.inflate_offset += result.bytes_written as u64;
+        self.output_buffer_offset += result.bytes_written;
 
-        loop {
-            let buffer_start_offset = self.inflate_offset - self.output_buffer_offset as u64;
-
-            if self.output_buffer_offset > 0 && start_offset < self.inflate_offset && end_offset >= buffer_start_offset {
-                let chunk_start_offset =
-                    start_offset.max(buffer_start_offset) - buffer_start_offset;
-                let chunk_end_offset = end_offset.min(self.inflate_offset) - buffer_start_offset;
-
-                return Ok(Some((chunk_start_offset as usize, chunk_end_offset as usize)));
-            } else if end_offset <= buffer_start_offset {
-                return Ok(None);
-            } else {
-                self.output_buffer_offset = 0;
-            }
-
-            self.pack.read_buf(&mut self.input_buffer).await?;
-
-            let result = inflate(
-                &mut self.inflate_state,
-                &self.input_buffer,
-                &mut self.output_buffer[self.output_buffer_offset..],
-                MZFlush::None,
-            );
-
-            self.input_buffer.copy_within(result.bytes_consumed.., 0);
-            self.input_buffer
-                .truncate(self.input_buffer.len() - result.bytes_consumed);
-
-            self.pack_offset += result.bytes_consumed as u64;
-            self.inflate_offset += result.bytes_written as u64;
-            self.output_buffer_offset += result.bytes_written;
-
-            match result.status {
-                Ok(_) => continue,
-                Err(MZError::Buf) => continue,
-                Err(err) => return Err(anyhow!("inflate error: {:?}", err)),
-            }
+        match result.status {
+            Ok(_status) => Ok(()),
+            Err(MZError::Buf) => Ok(()),
+            Err(err) => Err(anyhow!("inflate error: {:?}", err)),
         }
     }
 
@@ -694,13 +620,32 @@ where
         &'a mut self,
         object: &IndexObject,
         range: impl std::ops::RangeBounds<u64> + Clone,
-    ) -> Result<&'a [u8]> {
-        if let Some((chunk_start_offset, chunk_end_offset)) = self.read(object, range).await? {
-            let buffer = &self.output_buffer[chunk_start_offset..chunk_end_offset];
-            self.output_buffer_offset = 0;
-            Ok(buffer)
-        } else {
-            Ok(&[])
+    ) -> Result<Option<&'a [u8]>> {
+        loop {
+            let output_slice = self.slice_output_buffer_range(object, range.clone());
+            match output_slice {
+                Some((0, 0)) => {
+                    self.output_buffer_offset = 0;
+                    self.read(object).await?
+                }
+                Some((slice_start, slice_end)) => {
+                    return Ok(Some(&self.output_buffer[slice_start..slice_end]))
+                }
+                None => return Ok(None),
+            }
+        }
+    }
+
+    fn advance(
+        &mut self,
+        object: &IndexObject,
+        range: impl std::ops::RangeBounds<u64> + Clone,
+        count: usize,
+    ) {
+        if let Some((slice_start, slice_end)) = self.slice_output_buffer_range(object, range) {
+            assert!(slice_start + count <= slice_end);
+            self.output_buffer.copy_within(slice_start + count.., 0);
+            self.output_buffer_offset -= slice_start + count;
         }
     }
 
@@ -710,26 +655,26 @@ where
         range: impl std::ops::RangeBounds<u64> + Clone,
         parser: &mut P,
     ) -> Result<Option<P::Output>> {
-        while let Some((chunk_start_offset, chunk_end_offset)) = self.read(object, range.clone()).await? {
-            let mut output_buffer = std::mem::replace(&mut self.output_buffer, vec![]);
+        while let Some((slice_start, slice_end)) =
+            self.slice_output_buffer_range(object, range.clone())
+        {
+            let output_buffer = std::mem::replace(&mut self.output_buffer, vec![]);
 
-            let input = &output_buffer[chunk_start_offset..chunk_end_offset];
+            let input = &output_buffer[slice_start..slice_end];
 
             let result = parser.parse(input).await;
             match result {
                 Ok((input, result)) => {
-                    let consumed_bytes = chunk_end_offset - chunk_start_offset - input.len();
-
-                    output_buffer.copy_within(chunk_start_offset + consumed_bytes.., 0);
-                    self.output_buffer_offset -= chunk_start_offset + consumed_bytes;
+                    let consumed_bytes = slice_end - slice_start - input.len();
                     self.output_buffer = output_buffer;
+                    self.advance(object, range.clone(), consumed_bytes);
 
                     return Ok(Some(result));
                 }
                 Err(nom::Err::Incomplete(_)) => {
-                    output_buffer.copy_within(chunk_start_offset.., 0);
-                    self.output_buffer_offset -= chunk_start_offset;
                     self.output_buffer = output_buffer;
+                    self.advance(object, range.clone(), 0);
+                    self.read(object).await?;
                 }
                 Err(nom::Err::Error(err)) => return Err(anyhow!("{:?}", err)),
                 Err(nom::Err::Failure(err)) => return Err(anyhow!("{:?}", err)),
@@ -781,7 +726,10 @@ mod tests {
             .read_bytes(&LOCAL_PACK_OBJECT_A, ..)
             .await
             .unwrap();
-        assert_eq!(data, b"fn main() {\n    println!(\"Hello, world!\");\n}\n");
+        assert_eq!(
+            data,
+            Some(&b"fn main() {\n    println!(\"Hello, world!\");\n}\n"[..])
+        );
     }
 
     #[tokio::test]
@@ -795,25 +743,35 @@ mod tests {
             .read_bytes(&LOCAL_PACK_OBJECT_A, ..)
             .await
             .unwrap();
-        assert_eq!(data, b"fn main() {\n ");
+        assert_eq!(data, Some(&b"fn main() {\n "[..]));
+        local_pack.advance(&LOCAL_PACK_OBJECT_A, .., 13);
 
         let data = local_pack
             .read_bytes(&LOCAL_PACK_OBJECT_A, ..)
             .await
             .unwrap();
-        assert_eq!(data, b"   println!(\"Hel");
+        assert_eq!(data, Some(&b"   println!(\"Hel"[..]));
+        local_pack.advance(&LOCAL_PACK_OBJECT_A, .., 16);
 
         let data = local_pack
             .read_bytes(&LOCAL_PACK_OBJECT_A, ..)
             .await
             .unwrap();
-        assert_eq!(data, b"lo");
+        assert_eq!(data, Some(&b"lo"[..]));
+        local_pack.advance(&LOCAL_PACK_OBJECT_A, .., 2);
 
         let data = local_pack
             .read_bytes(&LOCAL_PACK_OBJECT_A, ..)
             .await
             .unwrap();
-        assert_eq!(data, b", world!\");\n}\n");
+        assert_eq!(data, Some(&b", world!\");\n}\n"[..]));
+        local_pack.advance(&LOCAL_PACK_OBJECT_A, .., 14);
+
+        let data = local_pack
+            .read_bytes(&LOCAL_PACK_OBJECT_A, ..)
+            .await
+            .unwrap();
+        assert_eq!(data, None);
     }
 
     #[tokio::test]
@@ -827,7 +785,14 @@ mod tests {
             .read_bytes(&LOCAL_PACK_OBJECT_A, 16..)
             .await
             .unwrap();
-        assert_eq!(data, b"println!(\"Hello, world!\");\n}\n");
+        assert_eq!(data, Some(&b"println!(\"Hello, world!\");\n}\n"[..]));
+        local_pack.advance(&LOCAL_PACK_OBJECT_A, 16.., 29);
+
+        let data = local_pack
+            .read_bytes(&LOCAL_PACK_OBJECT_A, 16..)
+            .await
+            .unwrap();
+        assert_eq!(data, None);
     }
 
     #[tokio::test]
@@ -841,7 +806,14 @@ mod tests {
             .read_bytes(&LOCAL_PACK_OBJECT_A, ..9)
             .await
             .unwrap();
-        assert_eq!(data, b"fn main()");
+        assert_eq!(data, Some(&b"fn main()"[..]));
+        local_pack.advance(&LOCAL_PACK_OBJECT_A, ..9, 9);
+
+        let data = local_pack
+            .read_bytes(&LOCAL_PACK_OBJECT_A, ..9)
+            .await
+            .unwrap();
+        assert_eq!(data, None);
     }
 
     #[tokio::test]
@@ -855,7 +827,7 @@ mod tests {
             .read_bytes(&LOCAL_PACK_OBJECT_A, 26..39)
             .await
             .unwrap();
-        assert_eq!(data, b"Hello, world!");
+        assert_eq!(data, Some(&b"Hello, world!"[..]));
     }
 
     #[tokio::test]
@@ -869,7 +841,10 @@ mod tests {
             .read_bytes(&LOCAL_PACK_OBJECT_A, ..)
             .await
             .unwrap();
-        assert_eq!(data, b"fn main() {\n    println!(\"Hello, world!\");\n}\n");
+        assert_eq!(
+            data,
+            Some(&b"fn main() {\n    println!(\"Hello, world!\");\n}\n"[..])
+        );
 
         local_pack.seek(&LOCAL_PACK_OBJECT_A, 26).await.unwrap();
 
@@ -877,7 +852,7 @@ mod tests {
             .read_bytes(&LOCAL_PACK_OBJECT_A, 26..39)
             .await
             .unwrap();
-        assert_eq!(data, b"Hello, world!");
+        assert_eq!(data, Some(&b"Hello, world!"[..]));
     }
 
     #[tokio::test]
@@ -891,7 +866,7 @@ mod tests {
             .read_bytes(&LOCAL_PACK_OBJECT_A, 26..39)
             .await
             .unwrap();
-        assert_eq!(data, b"Hello, world!");
+        assert_eq!(data, Some(&b"Hello, world!"[..]));
 
         local_pack.seek(&LOCAL_PACK_OBJECT_B, 31).await.unwrap();
 
@@ -899,7 +874,7 @@ mod tests {
             .read_bytes(&LOCAL_PACK_OBJECT_B, 31..46)
             .await
             .unwrap();
-        assert_eq!(data, b"pub mod models;");
+        assert_eq!(data, Some(&b"pub mod models;"[..]));
     }
 
     #[tokio::test]
@@ -913,7 +888,7 @@ mod tests {
             .read_bytes(&LOCAL_PACK_OBJECT_B, 31..46)
             .await
             .unwrap();
-        assert_eq!(data, b"pub mod models;");
+        assert_eq!(data, Some(&b"pub mod models;"[..]));
 
         local_pack.seek(&LOCAL_PACK_OBJECT_A, 26).await.unwrap();
 
@@ -921,7 +896,7 @@ mod tests {
             .read_bytes(&LOCAL_PACK_OBJECT_A, 26..39)
             .await
             .unwrap();
-        assert_eq!(data, b"Hello, world!");
+        assert_eq!(data, Some(&b"Hello, world!"[..]));
     }
 
     #[tokio::test]
@@ -937,10 +912,7 @@ mod tests {
         impl LocalPackFileParser for Parser {
             type Output = Vec<u8>;
 
-            async fn parse<'a>(
-                &mut self,
-                input: &'a [u8],
-            ) -> nom::IResult<&'a [u8], Self::Output> {
+            async fn parse<'a>(&mut self, input: &'a [u8]) -> nom::IResult<&'a [u8], Self::Output> {
                 let (input, _) = nom::bytes::streaming::tag(b"fn")(input)?;
                 let (input, _) = nom::bytes::streaming::tag(b" ")(input)?;
                 let (input, fn_name) = nom::bytes::streaming::take_until("(")(input)?;
@@ -951,7 +923,10 @@ mod tests {
 
         let mut parser = Parser;
 
-        let result = local_pack.parse(&LOCAL_PACK_OBJECT_A, .., &mut parser).await.unwrap();
+        let result = local_pack
+            .parse(&LOCAL_PACK_OBJECT_A, .., &mut parser)
+            .await
+            .unwrap();
         assert_eq!(result, Some(b"main".to_vec()));
     }
 
@@ -968,10 +943,7 @@ mod tests {
         impl LocalPackFileParser for Parser {
             type Output = Vec<u8>;
 
-            async fn parse<'a>(
-                &mut self,
-                input: &'a [u8],
-            ) -> nom::IResult<&'a [u8], Self::Output> {
+            async fn parse<'a>(&mut self, input: &'a [u8]) -> nom::IResult<&'a [u8], Self::Output> {
                 let (input, name) = nom::bytes::streaming::take_until(" ")(input)?;
                 let (input, _) = nom::bytes::streaming::tag(" ")(input)?;
 
@@ -981,13 +953,22 @@ mod tests {
 
         let mut parser = Parser;
 
-        let result = local_pack.parse(&LOCAL_PACK_OBJECT_A, .., &mut parser).await.unwrap();
+        let result = local_pack
+            .parse(&LOCAL_PACK_OBJECT_A, .., &mut parser)
+            .await
+            .unwrap();
         assert_eq!(result, Some(b"fn".to_vec()));
 
-        let result = local_pack.parse(&LOCAL_PACK_OBJECT_A, .., &mut parser).await.unwrap();
+        let result = local_pack
+            .parse(&LOCAL_PACK_OBJECT_A, .., &mut parser)
+            .await
+            .unwrap();
         assert_eq!(result, Some(b"main()".to_vec()));
 
-        let result = local_pack.parse(&LOCAL_PACK_OBJECT_A, .., &mut parser).await.unwrap();
+        let result = local_pack
+            .parse(&LOCAL_PACK_OBJECT_A, .., &mut parser)
+            .await
+            .unwrap();
         assert_eq!(result, Some(b"{\n".to_vec()));
     }
 }
