@@ -3,9 +3,9 @@ use anyhow::{anyhow, Result};
 use fairing_core::models::{self, prelude::*};
 
 use git_pack_file_reader::GitPackFileReader;
+use parsers::PackFileObjectType;
 use pkt_line_reader::{GitPktLineOutput, GitPktLineReader};
 use ssh::{SshClient, SshClientConfig, SshReader};
-use parsers::PackFileObjectType;
 
 mod git_pack_file_reader;
 mod local_pack_file_reader;
@@ -131,7 +131,13 @@ impl GitRemoteSiteSource {
 
         reader.flush().await?;
 
-        local_pack_file_reader::extract(path, "./build").await?;
+        let commit_key = {
+            let mut key = [0u8; 20];
+            hex::decode_to_slice(fetch_tree_revision.resource(), &mut key)?;
+            key
+        };
+
+        local_pack_file_reader::extract(commit_key, path, "./build").await?;
 
         client.disconnect().await?;
 

@@ -1,3 +1,5 @@
+use anyhow::anyhow;
+
 /// Git pkt-line: https://git-scm.com/docs/protocol-common/en#_pkt_line_format
 #[derive(Copy, Clone, Debug)]
 pub enum PktLine<D> {
@@ -234,6 +236,125 @@ pub fn delta_instruction<'a>(input: &'a [u8]) -> nom::IResult<&[u8], DeltaInstru
             }),
         ),
     )))(input)
+}
+
+#[derive(Copy, Clone, Debug, PartialEq)]
+pub struct Commit {
+    pub tree: [u8; 20],
+    pub parent: Option<[u8; 20]>,
+    //author: CommitPersonDate<'a>,
+    //committer: CommitPersonDate<'a>,
+}
+
+#[derive(Copy, Clone, Debug, PartialEq)]
+pub struct CommitPersonDate<'a> {
+    pub name: &'a str,
+    pub email: &'a str,
+    pub timestamp: i64,
+    pub timezone: i16,
+}
+
+fn object_hash_text_to_binary(input: &[u8]) -> nom::IResult<&[u8], [u8; 20]> {
+    nom::combinator::map_res(
+        nom::bytes::complete::take_while_m_n(40, 40, nom::character::is_hex_digit),
+        |str_hash| {
+            let mut hash = [0u8; 20];
+            hex::decode_to_slice(str_hash, &mut hash).map(|()| hash)
+        },
+    )(input)
+}
+
+pub fn commit_object<'a>(input: &'a [u8]) -> nom::IResult<&[u8], Commit> {
+    let (input, tree) = nom::sequence::delimited(
+        nom::bytes::complete::tag(b"tree "),
+        object_hash_text_to_binary,
+        nom::bytes::complete::tag(b"\n"),
+    )(input)?;
+
+    let (input, parent) = nom::combinator::opt(nom::sequence::delimited(
+        nom::bytes::complete::tag(b"tree "),
+        object_hash_text_to_binary,
+        nom::bytes::complete::tag(b"\n"),
+    ))(input)?;
+
+    Ok((input, Commit { tree, parent }))
+}
+
+#[derive(Copy, Clone, Debug, PartialEq)]
+pub enum TreeItem<'a> {
+    Blob {
+        mode: TreeItemBlobMode,
+        hash: [u8; 20],
+        name: &'a str,
+    },
+    Tree {
+        hash: [u8; 20],
+        name: &'a str,
+    },
+}
+
+#[derive(Copy, Clone, Debug, PartialEq)]
+pub enum TreeItemBlobMode {
+    Normal,
+    Executable,
+    SymbolicLink,
+}
+
+fn object_hash_binary(input: &[u8]) -> nom::IResult<&[u8], [u8; 20]> {
+    nom::combinator::map(nom::bytes::complete::take(20_usize), |hash| {
+        let mut out_hash = [0u8; 20];
+        out_hash.copy_from_slice(hash);
+        out_hash
+    })(input)
+}
+
+pub fn tree_item<'a>(input: &'a [u8]) -> nom::IResult<&[u8], TreeItem<'a>> {
+    nom::branch::alt((
+        nom::combinator::map_res(
+            nom::sequence::tuple((
+                tree_item_blob_mode,
+                nom::bytes::complete::tag(b" "),
+                nom::bytes::complete::take_while_m_n(1, 200, |c| c != b'\0' && c != b'/'),
+                nom::bytes::complete::tag(b"\0"),
+                object_hash_binary,
+            )),
+            |(mode, _, name, _, hash)| {
+                Ok::<_, anyhow::Error>(TreeItem::Blob {
+                    mode,
+                    hash,
+                    name: std::str::from_utf8(name).map_err(|_| anyhow!("invalid name"))?,
+                })
+            },
+        ),
+        nom::combinator::map_res(
+            nom::sequence::tuple((
+                nom::bytes::complete::tag(b"40000 "),
+                nom::bytes::complete::take_while_m_n(1, 200, |c| c != b'\0' && c != b'/'),
+                nom::bytes::complete::tag(b"\0"),
+                object_hash_binary,
+            )),
+            |(_, name, _, hash)| {
+                Ok::<_, anyhow::Error>(TreeItem::Tree {
+                    hash,
+                    name: std::str::from_utf8(name).map_err(|_| anyhow!("invalid name"))?,
+                })
+            },
+        ),
+    ))(input)
+}
+
+fn tree_item_blob_mode(input: &[u8]) -> nom::IResult<&[u8], TreeItemBlobMode> {
+    nom::branch::alt((
+        nom::combinator::map(nom::bytes::complete::tag(b"100644"), |_| {
+            TreeItemBlobMode::Normal
+        }),
+        nom::combinator::map(nom::bytes::complete::tag(b"100755"), |_| {
+            TreeItemBlobMode::Executable
+        }),
+        nom::combinator::map(nom::bytes::complete::tag(b"120000"), |_| {
+            TreeItemBlobMode::SymbolicLink
+        }),
+    ))(input)
 }
 
 #[cfg(test)]

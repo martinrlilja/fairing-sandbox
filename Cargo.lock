@@ -563,6 +563,7 @@ dependencies = [
  "fairing-core",
  "fairing-proto",
  "futures",
+ "hex",
  "hyper",
  "memmap",
  "miniz_oxide",

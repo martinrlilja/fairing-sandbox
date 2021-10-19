@@ -13,7 +13,7 @@ use super::{
         pack_file_header, pack_file_object_header, PackFileHeader, PackFileObjectHeader,
         PackFileObjectType,
     },
-    SshClient, SshReader, IndexObject,
+    IndexObject, SshClient, SshReader,
 };
 
 pub struct GitPackFileReader {

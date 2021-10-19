@@ -18,6 +18,7 @@ clap = "2"
 fairing-core = { path = "../fairing-core" }
 fairing-proto = { path = "../fairing-proto" }
 futures = "0.3"
+hex = "0.4"
 hyper = "0.14"
 miniz_oxide = "0.4"
 memmap = "0.7"
