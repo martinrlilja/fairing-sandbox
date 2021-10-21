@@ -106,7 +106,7 @@ impl Teams for TeamsService {
     #[tracing::instrument]
     async fn delete_team(
         &self,
-        request: Request<DeleteTeamRequest>,
+        _request: Request<DeleteTeamRequest>,
     ) -> Result<Response<DeleteTeamResponse>, Status> {
         todo!();
     }
@@ -114,7 +114,7 @@ impl Teams for TeamsService {
     #[tracing::instrument]
     async fn list_team_members(
         &self,
-        request: Request<ListTeamMembersRequest>,
+        _request: Request<ListTeamMembersRequest>,
     ) -> Result<Response<ListTeamMembersResponse>, Status> {
         todo!();
     }
@@ -122,7 +122,7 @@ impl Teams for TeamsService {
     #[tracing::instrument]
     async fn create_team_member(
         &self,
-        request: Request<CreateTeamMemberRequest>,
+        _request: Request<CreateTeamMemberRequest>,
     ) -> Result<Response<TeamMember>, Status> {
         todo!();
     }
@@ -130,7 +130,7 @@ impl Teams for TeamsService {
     #[tracing::instrument]
     async fn delete_team_member(
         &self,
-        request: Request<DeleteTeamMemberRequest>,
+        _request: Request<DeleteTeamMemberRequest>,
     ) -> Result<Response<DeleteTeamMemberResponse>, Status> {
         todo!();
     }

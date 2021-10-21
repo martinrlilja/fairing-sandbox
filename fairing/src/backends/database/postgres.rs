@@ -417,7 +417,7 @@ impl database::SiteRepository for PostgresDatabase {
         Ok(site)
     }
 
-    async fn delete_site(&self, site_name: &models::SiteName) -> Result<()> {
+    async fn delete_site(&self, _site_name: &models::SiteName) -> Result<()> {
         todo!();
     }
 

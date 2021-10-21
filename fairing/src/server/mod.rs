@@ -107,7 +107,7 @@ impl AuthInterceptor {
     }
 
     fn interceptor(&self) -> tonic::Interceptor {
-        let database = self.database.clone();
+        let _database = self.database.clone();
 
         tonic::Interceptor::new(move |req: Request<()>| -> Result<Request<()>, Status> { Ok(req) })
     }
