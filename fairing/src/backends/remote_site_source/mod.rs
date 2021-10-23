@@ -1,5 +1,5 @@
 use anyhow::{anyhow, Result};
-use std::sync::Arc;
+use std::{path::PathBuf, sync::Arc};
 
 use fairing_core::{
     backends::{remote_site_source, RemoteSiteSource},
@@ -39,12 +39,13 @@ impl remote_site_source::RemoteSiteSourceRepository for GenericRemoteSiteSource 
         &self,
         site_source: &models::SiteSource,
         fetch_tree_revision: &models::TreeRevisionName<'n>,
-    ) -> Result<()> {
+        work_directory: PathBuf,
+    ) -> Result<PathBuf> {
         match site_source.kind {
             Some(models::SiteSourceKind::GitSource(ref git_source)) => {
                 let remote_site_source = git::GitRemoteSiteSource;
                 remote_site_source
-                    .fetch(site_source, git_source, fetch_tree_revision)
+                    .fetch(site_source, git_source, fetch_tree_revision, work_directory)
                     .await
             }
             None => Err(anyhow!("unknown site source kind")),

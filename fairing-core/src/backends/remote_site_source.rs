@@ -1,5 +1,5 @@
 use anyhow::Result;
-use std::{fmt::Debug, sync::Arc};
+use std::{fmt::Debug, path::PathBuf, sync::Arc};
 
 use crate::models;
 
@@ -20,5 +20,6 @@ pub trait RemoteSiteSourceRepository: Send + Sync {
         &self,
         site_source: &models::SiteSource,
         fetch_tree_revision: &models::TreeRevisionName<'n>,
-    ) -> Result<()>;
+        work_directory: PathBuf,
+    ) -> Result<PathBuf>;
 }

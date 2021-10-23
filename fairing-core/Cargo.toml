@@ -20,9 +20,11 @@ hex = "0.4"
 lazy_static = "1"
 rand = "0.8"
 regex = "1"
+serde = { version = "1", features = ["derive"] }
 sqlx = { version = "0.5", features = ["postgres", "chrono", "macros", "runtime-tokio-rustls"] }
 thrussh-keys = "0.20"
 tokio = { version = "1", features = ["rt", "time"] }
+toml = "0.5"
 tracing = "0.1"
 unicode-normalization = "0.1"
 unicode-script = "0.5"

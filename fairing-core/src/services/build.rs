@@ -1,6 +1,10 @@
 use anyhow::{anyhow, Result};
 use futures_util::{pin_mut, stream::FuturesUnordered, StreamExt};
-use tokio::task;
+use std::{
+    io::ErrorKind,
+    path::{Path, PathBuf},
+};
+use tokio::{fs, task};
 
 use crate::{
     backends::{BuildQueue, Database, RemoteSiteSource},
@@ -105,12 +109,57 @@ impl BuildTask {
 
         tracing::trace!("running build");
 
-        self.remote_site_source
-            .fetch(&site_source, &self.tree_revision.name)
+        let work_directory: PathBuf = ".build".into();
+
+        let source_directory = self
+            .remote_site_source
+            .fetch(&site_source, &self.tree_revision.name, work_directory)
             .await?;
 
         tracing::trace!("fetched source");
 
+        let build_file = read_build_file(&source_directory).await?;
+
+        tracing::debug!("build file: {:?}", build_file);
+
         Ok(())
     }
+}
+
+async fn read_build_file(path: impl AsRef<Path>) -> Result<BuildFile> {
+    const BUILD_FILE_MAX_SIZE: u64 = 4_194_304;
+
+    let build_file_path = path.as_ref().join("Fairing.toml");
+
+    let build_file_metadata = fs::metadata(&build_file_path).await;
+    match build_file_metadata {
+        Ok(metadata) if metadata.len() > BUILD_FILE_MAX_SIZE => {
+            Err(anyhow!("build file is too large"))
+        }
+        Ok(_) => {
+            tracing::debug!("read build file from: {:?}", build_file_path);
+            let build_file_data = fs::read(&build_file_path).await?;
+            let build_file = toml::de::from_slice(&build_file_data)?;
+            Ok(build_file)
+        }
+        Err(err) if err.kind() == ErrorKind::NotFound => {
+            tracing::debug!("no build file found, using build file default");
+            Ok(BuildFile {
+                build: BuildFileBuild {
+                    publish: ".".into(),
+                },
+            })
+        }
+        Err(err) => Err(err.into()),
+    }
+}
+
+#[derive(Clone, Debug, serde::Deserialize)]
+struct BuildFile {
+    build: BuildFileBuild,
+}
+
+#[derive(Clone, Debug, serde::Deserialize)]
+struct BuildFileBuild {
+    publish: String,
 }

@@ -146,12 +146,10 @@ struct TreeParser<'a> {
     path: PathBuf,
 }
 
-pub async fn extract(
-    commit_key: [u8; 20],
-    path: impl AsRef<Path>,
-    path_build: impl AsRef<Path>,
-) -> Result<()> {
-    let mut pack_file_reader = LocalPackFileReader::open(path).await?;
+pub async fn extract(commit_key: [u8; 20], work_directory: impl AsRef<Path>) -> Result<PathBuf> {
+    let work_directory = work_directory.as_ref();
+    let mut pack_file_reader = LocalPackFileReader::open(work_directory).await?;
+    let source_directory = work_directory.join("source");
 
     // Reconstruct ref deltas.
     loop {
@@ -201,12 +199,11 @@ pub async fn extract(
         .await?
         .ok_or_else(|| anyhow!("couldn't find tree"))?;
 
-    let path_build = path_build.as_ref().to_owned();
-    fs::create_dir_all(&path_build).await?;
+    fs::create_dir_all(&source_directory).await?;
 
     tracing::debug!("{:?}", tree_data);
 
-    let path_build = fs::canonicalize(path_build).await?;
+    let path_build = fs::canonicalize(&source_directory).await?;
     let mut tree_parsers = vec![TreeParser {
         input: tree_data,
         path: path_build.clone(),
@@ -275,7 +272,7 @@ pub async fn extract(
         }
     }
 
-    Ok(())
+    Ok(source_directory)
 }
 
 async fn reconstruct<'a>(

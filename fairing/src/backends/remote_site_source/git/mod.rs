@@ -1,4 +1,5 @@
 use anyhow::{anyhow, Result};
+use std::path::PathBuf;
 
 use fairing_core::models::{self, prelude::*};
 
@@ -71,7 +72,8 @@ impl GitRemoteSiteSource {
         site_source: &models::SiteSource,
         git_source: &models::GitSource,
         fetch_tree_revision: &models::TreeRevisionName<'n>,
-    ) -> Result<()> {
+        work_directory: PathBuf,
+    ) -> Result<PathBuf> {
         let repository = git_source.repository_url.parts()?;
         let command = format!("git-upload-pack '{}'", repository.path);
 
@@ -123,13 +125,13 @@ impl GitRemoteSiteSource {
             }
         }
 
-        let path = ".";
-
-        let mut reader = GitPackFileReader::open(path).await?;
+        let mut reader = GitPackFileReader::open(&work_directory).await?;
 
         while let Some(Some(())) = client.read(&mut reader).await? {}
 
         reader.flush().await?;
+
+        client.disconnect().await?;
 
         let commit_key = {
             let mut key = [0u8; 20];
@@ -137,10 +139,8 @@ impl GitRemoteSiteSource {
             key
         };
 
-        local_pack_file_reader::extract(commit_key, path, "./build").await?;
+        let source_directory = local_pack_file_reader::extract(commit_key, &work_directory).await?;
 
-        client.disconnect().await?;
-
-        Ok(())
+        Ok(source_directory)
     }
 }
