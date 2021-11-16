@@ -13,6 +13,13 @@ impl BlobChecksum {
     }
 }
 
+#[derive(Clone, Debug, sqlx::Type)]
+#[repr(i16)]
+pub enum CompressionAlgorithm {
+    None = 0,
+    Zstd = 1,
+}
+
 #[derive(Clone, Debug)]
 pub struct CreateBlob {
     pub checksum: BlobChecksum,
@@ -21,14 +28,15 @@ pub struct CreateBlob {
     pub size: i32,
     pub size_on_disk: i32,
 
-    pub compression_algorithm: i16,
+    pub compression_algorithm: CompressionAlgorithm,
     pub compression_level: i16,
 }
 
-#[derive(Copy, Clone, Debug)]
+#[derive(Copy, Clone, Debug, sqlx::Type)]
+#[sqlx(transparent)]
 pub struct FileKeyspaceId(pub uuid::Uuid);
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, sqlx::FromRow)]
 pub struct FileKeyspace {
     pub id: FileKeyspaceId,
     pub key: Vec<u8>,

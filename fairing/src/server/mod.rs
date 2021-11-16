@@ -1,5 +1,5 @@
 use fairing_core::{
-    backends::Database,
+    backends::{Database, FileMetadata},
     models::{self, prelude::*},
 };
 use fairing_proto::{
@@ -16,14 +16,20 @@ mod sites;
 mod teams;
 mod users;
 
-pub async fn api_server(database: Database, addr: SocketAddr) -> Result<(), Error> {
+pub async fn api_server(
+    database: Database,
+    file_metadata: FileMetadata,
+    addr: SocketAddr,
+) -> Result<(), Error> {
     let web_config = tonic_web::config();
     let auth = AuthInterceptor::new(&database);
 
     let users_server = UsersServer::new(users::UsersService::new(&database));
 
-    let teams_server =
-        TeamsServer::with_interceptor(teams::TeamsService::new(&database), auth.interceptor());
+    let teams_server = TeamsServer::with_interceptor(
+        teams::TeamsService::new(&database, &file_metadata),
+        auth.interceptor(),
+    );
 
     let sites_server =
         SitesServer::with_interceptor(sites::SitesService::new(&database), auth.interceptor());
@@ -93,8 +99,6 @@ async fn auth<T>(
     }
 }
 
-/// Authentication interceptor (middleware) for tonic that adds the current user's name to the
-/// request's metadata. If the user didn't authenticate themselves an error is returned.
 struct AuthInterceptor {
     database: Database,
 }
@@ -106,9 +110,9 @@ impl AuthInterceptor {
         }
     }
 
-    fn interceptor(&self) -> tonic::Interceptor {
+    fn interceptor(&self) -> fn(Request<()>) -> Result<Request<()>, Status> {
         let _database = self.database.clone();
 
-        tonic::Interceptor::new(move |req: Request<()>| -> Result<Request<()>, Status> { Ok(req) })
+        move |req: Request<()>| -> Result<Request<()>, Status> { Ok(req) }
     }
 }

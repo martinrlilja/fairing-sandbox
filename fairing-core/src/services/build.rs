@@ -1,4 +1,4 @@
-use anyhow::{anyhow, Result};
+use anyhow::{anyhow, ensure, Context, Result};
 use futures_util::{pin_mut, stream::FuturesUnordered, StreamExt};
 use std::{
     io::ErrorKind,
@@ -7,7 +7,7 @@ use std::{
 use tokio::{fs, task};
 
 use crate::{
-    backends::{BuildQueue, Database, RemoteSiteSource},
+    backends::{BuildQueue, Database, FileMetadata, RemoteSiteSource},
     models::{prelude::*, TreeRevision},
     services::Storage,
 };
@@ -32,12 +32,14 @@ impl BuildServiceBuilder {
         &self,
         build_queue: BuildQueue,
         database: Database,
+        file_metadata: FileMetadata,
         remote_site_source: RemoteSiteSource,
         storage: Storage,
     ) -> BuildService {
         BuildService {
             build_queue,
             database,
+            file_metadata,
             remote_site_source,
             storage,
             concurrent_builds: self.concurrent_builds,
@@ -49,6 +51,7 @@ impl BuildServiceBuilder {
 pub struct BuildService {
     build_queue: BuildQueue,
     database: Database,
+    file_metadata: FileMetadata,
     remote_site_source: RemoteSiteSource,
     storage: Storage,
     concurrent_builds: usize,
@@ -57,8 +60,6 @@ pub struct BuildService {
 
 impl BuildService {
     pub async fn run(mut self) -> Result<()> {
-        // TODO: make this loop better...
-
         let stream = self.build_queue.stream().await?;
         pin_mut!(stream);
 
@@ -66,6 +67,7 @@ impl BuildService {
             let tree_revision = tree_revision?;
             let build_task = BuildTask {
                 database: self.database.clone(),
+                file_metadata: self.file_metadata.clone(),
                 remote_site_source: self.remote_site_source.clone(),
                 storage: self.storage.clone(),
                 tree_revision,
@@ -93,6 +95,7 @@ impl BuildService {
 
 struct BuildTask {
     database: Database,
+    file_metadata: FileMetadata,
     remote_site_source: RemoteSiteSource,
     storage: Storage,
     tree_revision: TreeRevision,
@@ -111,16 +114,76 @@ impl BuildTask {
 
         let work_directory: PathBuf = ".build".into();
 
+        fs::create_dir(&work_directory).await?;
+
         let source_directory = self
             .remote_site_source
             .fetch(&site_source, &self.tree_revision.name, work_directory)
             .await?;
+
+        let source_directory = fs::canonicalize(source_directory).await?;
 
         tracing::trace!("fetched source");
 
         let build_file = read_build_file(&source_directory).await?;
 
         tracing::debug!("build file: {:?}", build_file);
+
+        let team_name = site_source_name.parent().parent();
+        let team = self
+            .database
+            .get_team(&team_name)
+            .await?
+            .ok_or_else(|| anyhow!("failed to find team: {}", team_name.name()))?;
+
+        let file_keyspace = self
+            .file_metadata
+            .get_file_keyspace(&team.file_keyspace_id)
+            .await?
+            .ok_or_else(|| {
+                anyhow!(
+                    "failed to find file keyspace for team: {}",
+                    team_name.name()
+                )
+            })?;
+
+        let publish_directory = source_directory.join(build_file.build.publish);
+        let publish_directory = fs::canonicalize(publish_directory)
+            .await
+            .context("canonicalizing publish directory")?;
+
+        ensure!(
+            publish_directory.starts_with(&source_directory),
+            "build publish directory cannot be outside of source directory"
+        );
+
+        let mut directories = vec![publish_directory];
+
+        while let Some(directory) = directories.pop() {
+            let mut read_dir = fs::read_dir(directory).await.context("read directory")?;
+
+            while let Some(entry) = read_dir.next_entry().await? {
+                let entry_metadata = entry.metadata().await.context("read file metadata")?;
+                tracing::debug!("path: {:?}", entry.path());
+
+                if entry_metadata.is_dir() {
+                    directories.push(entry.path());
+                } else if entry_metadata.is_file() {
+                    let file = fs::OpenOptions::new()
+                        .read(true)
+                        .open(entry.path())
+                        .await
+                        .context("open file")?;
+
+                    let stream = tokio_util::io::ReaderStream::new(file);
+
+                    self.storage
+                        .store_file(&file_keyspace, entry_metadata.len() as i64, stream)
+                        .await
+                        .context("store file")?;
+                }
+            }
+        }
 
         Ok(())
     }

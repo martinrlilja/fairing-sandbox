@@ -106,13 +106,14 @@ impl PostgresDatabase {
 
         sqlx::query(
             r"
-            INSERT INTO teams (id, name, created_time)
-            VALUES ($1, $2, $3);
+            INSERT INTO teams (id, name, created_time, file_keyspace_id)
+            VALUES ($1, $2, $3, $4);
             ",
         )
         .bind(&team_id)
         .bind(team.name.resource())
         .bind(&team.created_time)
+        .bind(&team.file_keyspace_id)
         .execute(&mut *tx)
         .await?;
 
@@ -230,24 +231,15 @@ impl database::TeamRepository for PostgresDatabase {
     }
 
     #[tracing::instrument]
-    async fn get_team(
-        &self,
-        user_name: &models::UserName,
-        team_name: &models::TeamName,
-    ) -> Result<Option<models::Team>> {
+    async fn get_team(&self, team_name: &models::TeamName) -> Result<Option<models::Team>> {
         let team = sqlx::query_as(
             r"
-            SELECT 'teams/' || t.name AS name, t.created_time
+            SELECT 'teams/' || t.name AS name, t.created_time, t.file_keyspace_id
             FROM teams t
-            JOIN team_members tmname TEXT UNIQUE NOT
-                ON t.id = tm.team_id
-            JOIN users u
-                ON u.id = tm.user_id
-            WHERE u.name = $1 AND t.name = $2
+            WHERE t.name = $1
             LIMIT 100;
             ",
         )
-        .bind(user_name.resource())
         .bind(team_name.resource())
         .fetch_optional(&self.pool)
         .await?;

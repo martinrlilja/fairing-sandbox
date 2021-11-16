@@ -1,29 +1,10 @@
-use anyhow::Result;
+use anyhow::{Result, Context as _};
 use fairing_core::{backends::file_metadata, models};
 
 use crate::backends::PostgresDatabase;
 
 #[async_trait::async_trait]
 impl file_metadata::FileMetadataRepository for PostgresDatabase {
-    async fn create_blob(&self, blob: &models::CreateBlob) -> Result<()> {
-        sqlx::query(
-            r#"
-            INSERT INTO blobs (checksum, storage_id, "size", size_on_disk, compression_algorithm, compression_level)
-            VALUES ($1, $2, $3, $4, $5, $6);
-            "#,
-        )
-        .bind(&blob.checksum.0)
-        .bind(&blob.storage_id)
-        .bind(&blob.size)
-        .bind(&blob.size_on_disk)
-        .bind(&blob.compression_algorithm)
-        .bind(&blob.compression_level)
-        .execute(&self.pool)
-        .await?;
-
-        Ok(())
-    }
-
     async fn create_file_keyspace(
         &self,
         file_keyspace: &models::CreateFileKeyspace,
@@ -36,12 +17,53 @@ impl file_metadata::FileMetadataRepository for PostgresDatabase {
             VALUES ($1, $2);
             "#,
         )
-        .bind(&file_keyspace.id.0)
+        .bind(&file_keyspace.id)
         .bind(&file_keyspace.key)
         .execute(&self.pool)
-        .await?;
+        .await
+        .context("create file keyspace")?;
 
         Ok(file_keyspace)
+    }
+
+    async fn get_file_keyspace(
+        &self,
+        file_keyspace_id: &models::FileKeyspaceId,
+    ) -> Result<Option<models::FileKeyspace>> {
+        let file_keyspace = sqlx::query_as(
+            r#"
+            SELECT id, key
+            FROM file_keyspace
+            WHERE id = $1;
+            "#,
+        )
+        .bind(&file_keyspace_id)
+        .fetch_optional(&self.pool)
+        .await
+        .context("get file keyspace")?;
+
+        Ok(file_keyspace)
+    }
+
+    async fn create_blob(&self, blob: &models::CreateBlob) -> Result<()> {
+        sqlx::query(
+            r#"
+            INSERT INTO blobs (checksum, storage_id, "size", size_on_disk, compression_algorithm, compression_level)
+            VALUES ($1, $2, $3, $4, $5, $6)
+            ON CONFLICT (checksum) DO NOTHING;
+            "#,
+        )
+        .bind(&blob.checksum.0)
+        .bind(&blob.storage_id)
+        .bind(&blob.size)
+        .bind(&blob.size_on_disk)
+        .bind(&blob.compression_algorithm)
+        .bind(&blob.compression_level)
+        .execute(&self.pool)
+        .await
+        .context("create blob")?;
+
+        Ok(())
     }
 
     async fn create_file(&self, file: &models::CreateFile) -> Result<models::File> {
@@ -58,7 +80,8 @@ impl file_metadata::FileMetadataRepository for PostgresDatabase {
         .bind(&file.size)
         .bind(&file.is_valid_utf8)
         .execute(&self.pool)
-        .await?;
+        .await
+        .context("create file")?;
 
         Ok(file)
     }
@@ -76,7 +99,7 @@ impl file_metadata::FileMetadataRepository for PostgresDatabase {
             SELECT $1, $3, size, $4
             FROM files
             WHERE file_keyspace = $1 AND checksum = $2
-            ON CONFLICT (checksum) DO NOTHING;
+            ON CONFLICT (file_keyspace, checksum) DO NOTHING;
             "#,
         )
         .bind(&file_id.0 .0)
@@ -84,22 +107,24 @@ impl file_metadata::FileMetadataRepository for PostgresDatabase {
         .bind(&file.checksum)
         .bind(&file.is_valid_utf8)
         .execute(&mut tx)
-        .await?;
+        .await
+        .context("finalize file (create)")?;
 
         if result.rows_affected() == 1 {
             // If this file is new and unique, update all file chunks to the correct checksum.
             sqlx::query(
                 r"
                 UPDATE file_chunks
-                WHERE file_keyspace = $1 AND file_checksum = $2
-                SET file_checksum = $3;
+                SET file_checksum = $3
+                WHERE file_keyspace = $1 AND file_checksum = $2;
                 ",
             )
             .bind(&file_id.0 .0)
             .bind(&file_id.1)
             .bind(&file.checksum)
             .execute(&mut tx)
-            .await?;
+            .await
+            .context("finalize file (update)")?;
         }
 
         // Remove the temporary file.
@@ -112,7 +137,8 @@ impl file_metadata::FileMetadataRepository for PostgresDatabase {
         .bind(&file_id.0 .0)
         .bind(&file_id.1)
         .execute(&mut tx)
-        .await?;
+        .await
+        .context("finalize file (clean up)")?;
 
         tx.commit().await?;
 

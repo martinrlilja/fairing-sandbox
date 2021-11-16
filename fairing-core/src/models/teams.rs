@@ -4,6 +4,7 @@ use chrono::{DateTime, Utc};
 use crate::models::{
     self,
     resource_name::{validators, ParentedResourceName, ResourceName, ResourceNameInner},
+    FileKeyspaceId,
 };
 
 crate::impl_resource_name! {
@@ -29,12 +30,14 @@ impl<'n> ParentedResourceName<'n> for TeamMemberName<'n> {
 pub struct Team {
     pub name: TeamName<'static>,
     pub created_time: DateTime<Utc>,
+    pub file_keyspace_id: FileKeyspaceId,
 }
 
 #[derive(Debug)]
 pub struct CreateTeam<'a> {
     pub resource_id: &'a str,
     pub user_name: models::UserName<'static>,
+    pub file_keyspace_id: FileKeyspaceId,
 }
 
 impl<'a> CreateTeam<'a> {
@@ -44,6 +47,7 @@ impl<'a> CreateTeam<'a> {
         let team = Team {
             name,
             created_time: Utc::now(),
+            file_keyspace_id: self.file_keyspace_id,
         };
 
         let team_member = CreateTeamMember {

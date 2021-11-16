@@ -1,5 +1,5 @@
 use anyhow::Result;
-use std::{path::PathBuf, sync::Arc};
+use std::{path::PathBuf, sync::Arc, io::ErrorKind};
 use tokio::fs;
 
 use fairing_core::{backends::file_storage, models};
@@ -27,7 +27,11 @@ impl file_storage::FileStorageBackend for LocalFileStorage {
         let mut path = self.location.clone();
         path.push(blob_checksum.hex_prefix());
 
-        fs::create_dir(&path).await?;
+        match fs::create_dir(&path).await {
+            Ok(()) => (),
+            Err(err) if err.kind() == ErrorKind::AlreadyExists => (),
+            Err(err) => Err(err)?,
+        }
 
         let mut temp_path = path.clone();
         temp_path.push(uuid::Uuid::new_v4().to_string());

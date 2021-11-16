@@ -1,6 +1,10 @@
 use anyhow::Result;
 use clap::{crate_version, App, AppSettings, Arg, ArgMatches, SubCommand};
-use tonic::{metadata::MetadataValue, transport::Channel, Request};
+use tonic::{
+    metadata::{AsciiMetadataValue, MetadataValue},
+    transport::Channel,
+    Request,
+};
 
 mod config;
 
@@ -180,7 +184,7 @@ async fn command_teams(matches: &ArgMatches<'_>) -> Result<()> {
     };
 
     let channel = Channel::from_static("http://[::1]:8000").connect().await?;
-    let auth = auth().await?;
+    let auth = ConfigAuth::read().await?;
 
     let mut teams_client = TeamsClient::with_interceptor(channel, auth);
 
@@ -220,7 +224,7 @@ async fn command_sites(matches: &ArgMatches<'_>) -> Result<()> {
     };
 
     let channel = Channel::from_static("http://[::1]:8000").connect().await?;
-    let auth = auth().await?;
+    let auth = ConfigAuth::read().await?;
 
     let mut sites_client = SitesClient::with_interceptor(channel, auth);
 
@@ -300,21 +304,28 @@ async fn command_sites(matches: &ArgMatches<'_>) -> Result<()> {
     Ok(())
 }
 
-async fn auth() -> Result<tonic::Interceptor> {
-    let config = config::read_default().await?;
+struct ConfigAuth {
+    token: AsciiMetadataValue,
+}
 
-    let (user, password) = config.get_user(None).await.unwrap();
+impl ConfigAuth {
+    pub async fn read() -> Result<ConfigAuth> {
+        let config = config::read_default().await?;
+        let (user, password) = config.get_user(None).await.unwrap();
 
-    Ok(tonic::Interceptor::from(
-        move |mut req: Request<()>| -> Result<Request<()>, tonic::Status> {
-            let token = base64::encode_config(format!("{}:{}", user, password), base64::URL_SAFE);
-            let token = format!("Basic {}", token);
-            let token =
-                MetadataValue::from_str(&token).expect("failed to create authorization token");
+        let token = base64::encode_config(format!("{}:{}", user, password), base64::URL_SAFE);
+        let token = format!("Basic {}", token);
+        let token = MetadataValue::from_str(&token).expect("failed to create authorization token");
 
-            req.metadata_mut().insert("authorization", token);
+        Ok(ConfigAuth { token })
+    }
+}
 
-            Ok(req)
-        },
-    ))
+impl tonic::service::Interceptor for ConfigAuth {
+    fn call(&mut self, mut request: Request<()>) -> Result<Request<()>, tonic::Status> {
+        request
+            .metadata_mut()
+            .insert("authorization", self.token.clone());
+        Ok(request)
+    }
 }

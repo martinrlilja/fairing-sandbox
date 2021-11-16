@@ -32,11 +32,7 @@ pub trait UserRepository: Send + Sync {
 pub trait TeamRepository: Send + Sync {
     async fn list_teams(&self, user_name: &models::UserName) -> Result<Vec<models::Team>>;
 
-    async fn get_team(
-        &self,
-        user_name: &models::UserName,
-        team_name: &models::TeamName,
-    ) -> Result<Option<models::Team>>;
+    async fn get_team(&self, team_name: &models::TeamName) -> Result<Option<models::Team>>;
 
     async fn create_team(&self, team: &models::CreateTeam) -> Result<models::Team>;
 

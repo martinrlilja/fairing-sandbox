@@ -1,7 +1,7 @@
 use tonic::{Request, Response, Status};
 
 use fairing_core::{
-    backends::Database,
+    backends::{Database, FileMetadata},
     models::{self, prelude::*},
 };
 use fairing_proto::teams::v1beta1::{
@@ -14,12 +14,14 @@ use fairing_proto::teams::v1beta1::{
 #[derive(Debug)]
 pub struct TeamsService {
     database: Database,
+    file_metadata: FileMetadata,
 }
 
 impl TeamsService {
-    pub fn new(database: &Database) -> TeamsService {
+    pub fn new(database: &Database, file_metadata: &FileMetadata) -> TeamsService {
         TeamsService {
             database: database.clone(),
+            file_metadata: file_metadata.clone(),
         }
     }
 }
@@ -57,14 +59,10 @@ impl Teams for TeamsService {
         let team_name = models::TeamName::parse(&request.get_ref().name)
             .map_err(|_err| Status::invalid_argument("invalid team name"))?;
 
-        let team = self
-            .database
-            .get_team(&user_name, &team_name)
-            .await
-            .map_err(|err| {
-                tracing::error!("error: {:?}", err);
-                Status::internal("internal error")
-            })?;
+        let team = self.database.get_team(&team_name).await.map_err(|err| {
+            tracing::error!("error: {:?}", err);
+            Status::internal("internal error")
+        })?;
 
         if let Some(team) = team {
             let reply = Team {
@@ -86,9 +84,21 @@ impl Teams for TeamsService {
     ) -> Result<Response<Team>, Status> {
         let user_name = super::auth(&self.database, &request).await?;
 
+        let file_keyspace = models::CreateFileKeyspace;
+
+        let file_keyspace = self
+            .file_metadata
+            .create_file_keyspace(&file_keyspace)
+            .await
+            .map_err(|err| {
+                tracing::error!("error: {:?}", err);
+                Status::internal("internal error")
+            })?;
+
         let team = models::CreateTeam {
             resource_id: &request.get_ref().resource_id,
             user_name,
+            file_keyspace_id: file_keyspace.id,
         };
 
         let team = self.database.create_team(&team).await.map_err(|err| {

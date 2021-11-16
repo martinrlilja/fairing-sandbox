@@ -25,7 +25,7 @@ impl Storage {
         &self,
         file_keyspace: &models::FileKeyspace,
         file_size: i64,
-        file_stream: impl Stream<Item = Vec<u8>> + Unpin,
+        file_stream: impl Stream<Item = Result<impl AsRef<[u8]>, std::io::Error>> + Unpin,
     ) -> Result<()> {
         use blake2::{Blake2b, Digest};
         use fastcdc::FastCDC;
@@ -58,6 +58,9 @@ impl Storage {
         pin_mut!(file_stream);
 
         while let Some(file_data) = file_stream.next().await {
+            let file_data = file_data?;
+            let file_data = file_data.as_ref();
+
             hasher.update(&file_data);
 
             ensure!(file_data.len() <= CHUNK_AVG_SIZE);
@@ -67,7 +70,7 @@ impl Storage {
                 buffer.extend_from_slice(&file_data);
                 buffer
             } else {
-                file_data
+                file_data.to_vec()
             };
 
             let chunker = FastCDC::with_eof(
@@ -162,14 +165,14 @@ impl Storage {
 
         let compressed = zstd::encode_all(data, COMPRESSION_LEVEL as i32)?;
 
-        self.files.store_blob(&checksum, data).await?;
+        self.files.store_blob(&checksum, &compressed).await?;
 
         Ok(models::CreateBlob {
             checksum,
             storage_id: 0,
             size: data.len().try_into()?,
             size_on_disk: compressed.len().try_into()?,
-            compression_algorithm: 1,
+            compression_algorithm: models::CompressionAlgorithm::Zstd,
             compression_level: COMPRESSION_LEVEL,
         })
     }

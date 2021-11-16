@@ -36,6 +36,7 @@ async fn main() -> Result<()> {
         let build_service = BuildServiceBuilder::new().concurrent_builds(4).build(
             database.build_queue(),
             database.database(),
+            database.file_metadata(),
             remote_site_source,
             storage.clone(),
         );
@@ -53,7 +54,7 @@ async fn main() -> Result<()> {
 
         tracing::info!("server listening on {}", addr);
 
-        server::api_server(database.database(), addr).await?;
+        server::api_server(database.database(), database.file_metadata(), addr).await?;
     }
 
     Ok(())

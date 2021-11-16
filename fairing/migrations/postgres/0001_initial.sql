@@ -10,7 +10,8 @@ CREATE TABLE users (
 CREATE TABLE teams (
     id UUID PRIMARY KEY,
     name TEXT UNIQUE NOT NULL,
-    created_time TIMESTAMPTZ NOT NULL
+    created_time TIMESTAMPTZ NOT NULL,
+    file_keyspace_id UUID NOT NULL
 );
 
 CREATE TABLE team_members (
