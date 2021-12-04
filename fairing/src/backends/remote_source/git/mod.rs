@@ -23,12 +23,12 @@ pub struct IndexObject {
     length: u64,
 }
 
-pub struct GitRemoteSiteSource;
+pub struct GitRemoteSource;
 
-impl GitRemoteSiteSource {
+impl GitRemoteSource {
     pub async fn list_tree_revisions(
         &self,
-        site_source: &models::SiteSource,
+        source: &models::Source,
         git_source: &models::GitSource,
     ) -> Result<Vec<models::CreateBuild>> {
         let repository = git_source.repository_url.parts()?;
@@ -42,13 +42,13 @@ impl GitRemoteSiteSource {
         };
 
         let mut client = SshClient::connect(config).await?;
-        let mut reader = GitPktLineReader::new(&site_source.name);
+        let mut reader = GitPktLineReader::new(&source.name);
 
         let mut revisions = vec![];
 
         while let Some(output) = client.read(&mut reader).await? {
             if revisions.len() > REVISION_LIMIT {
-                tracing::debug!("too many revisions ({})", site_source.name.name());
+                tracing::debug!("too many revisions ({})", source.name.name());
                 break;
             }
 
@@ -69,7 +69,7 @@ impl GitRemoteSiteSource {
 
     pub async fn fetch<'n>(
         &self,
-        site_source: &models::SiteSource,
+        source: &models::Source,
         git_source: &models::GitSource,
         build: &models::Build,
         work_directory: PathBuf,
@@ -85,7 +85,7 @@ impl GitRemoteSiteSource {
         };
 
         let mut client = SshClient::connect(config).await?;
-        let mut reader = GitPktLineReader::new(&site_source.name);
+        let mut reader = GitPktLineReader::new(&source.name);
 
         let layer_set_name = build.name.parent();
         let mut found_hash: Option<String> = None;

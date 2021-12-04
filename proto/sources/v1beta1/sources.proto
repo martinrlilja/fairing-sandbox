@@ -1,0 +1,50 @@
+syntax = "proto3";
+
+package fairing.sources.v1beta1;
+
+service Sources {
+  rpc ListSources(ListSourcesRequest) returns (ListSourcesResponse);
+
+  rpc CreateSource(CreateSourceRequest) returns (Source);
+
+  rpc RefreshSource(RefreshSourceRequest) returns (RefreshSourceResponse);
+}
+
+message Source {
+  message GitSource {
+    string repository_url = 1;
+    string id_ed25519_pub = 2;
+  }
+
+  string name = 1;
+
+  string hook_url = 3;
+
+  oneof kind {
+    GitSource git_source = 20;
+  }
+}
+
+message ListSourcesRequest {
+  string parent = 1;
+}
+
+message ListSourcesResponse {
+  repeated Source resources = 1;
+}
+
+message CreateSourceRequest {
+  string resource_id = 1;
+
+  // Team name
+  string parent = 2;
+
+  Source source = 3;
+}
+
+message RefreshSourceRequest {
+  string name = 1;
+}
+
+message RefreshSourceResponse {
+}

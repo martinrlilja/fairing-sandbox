@@ -21,33 +21,34 @@ CREATE TABLE team_members (
     PRIMARY KEY (team_id, user_id)
 );
 
--- Sites
-CREATE TABLE sites (
-    id UUID PRIMARY KEY,
-    created_time TIMESTAMPTZ NOT NULL,
-    name TEXT UNIQUE NOT NULL,
-    team_id UUID REFERENCES teams (id) ON DELETE RESTRICT NOT NULL
-);
-
--- Site sources
-CREATE TABLE site_sources (
+-- Sources
+CREATE TABLE sources (
     id UUID PRIMARY KEY,
     created_time TIMESTAMPTZ NOT NULL,
     name TEXT NOT NULL,
 
-    site_id UUID REFERENCES sites (id) ON DELETE CASCADE NOT NULL,
+    team_id UUID REFERENCES teams (id) ON DELETE CASCADE NOT NULL,
 
     hook_token TEXT NOT NULL,
 
     last_refresh_time TIMESTAMPTZ DEFAULT NULL,
 
-    UNIQUE (site_id, name)
+    UNIQUE (team_id, name)
 );
 
-CREATE TABLE site_source_git (
-    site_source_id UUID PRIMARY KEY REFERENCES site_sources (id) ON DELETE CASCADE,
+CREATE TABLE source_git (
+    source_id UUID PRIMARY KEY REFERENCES sources (id) ON DELETE CASCADE,
     repository_url TEXT NOT NULL,
     id_ed25519_secret_key BYTEA
+);
+
+-- Sites
+CREATE TABLE sites (
+    id UUID PRIMARY KEY,
+    created_time TIMESTAMPTZ NOT NULL,
+    name TEXT UNIQUE NOT NULL,
+    team_id UUID REFERENCES teams (id) ON DELETE RESTRICT NOT NULL,
+    base_source_id UUID REFERENCES sources (id) ON DELETE RESTRICT NOT NULL
 );
 
 -- Domains
@@ -68,9 +69,9 @@ CREATE TABLE layer_sets (
     created_time TIMESTAMPTZ NOT NULL,
     name TEXT NOT NULL,
 
-    site_source_id UUID REFERENCES site_sources (id) ON DELETE SET NULL,
+    source_id UUID REFERENCES sources (id) ON DELETE SET NULL,
 
-    UNIQUE (site_source_id, name)
+    UNIQUE (source_id, name)
 );
 
 -- Builds

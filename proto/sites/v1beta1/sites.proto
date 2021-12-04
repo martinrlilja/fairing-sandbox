@@ -14,16 +14,11 @@ service Sites {
 
   // Delete a site by its name.
   rpc DeleteSite(DeleteSiteRequest) returns (DeleteSiteResponse);
-
-  rpc ListSiteSources(ListSiteSourcesRequest) returns (ListSiteSourcesResponse);
-
-  rpc CreateSiteSource(CreateSiteSourceRequest) returns (SiteSource);
-
-  rpc RefreshSiteSource(RefreshSiteSourceRequest) returns (RefreshSiteSourceResponse);
 }
 
 message Site {
   string name = 1;
+  string base_source = 3;
 }
 
 message ListSitesRequest {
@@ -41,6 +36,7 @@ message GetSiteRequest {
 message CreateSiteRequest {
   string resource_id = 1;
   string parent = 2;
+  string base_source = 3;
 }
 
 message DeleteSiteRequest {
@@ -48,43 +44,4 @@ message DeleteSiteRequest {
 }
 
 message DeleteSiteResponse {
-}
-
-message SiteSource {
-  message GitSource {
-    string repository_url = 1;
-    string id_ed25519_pub = 2;
-  }
-
-  string name = 1;
-
-  string hook_url = 3;
-
-  oneof kind {
-    GitSource git_source = 20;
-  }
-}
-
-message ListSiteSourcesRequest {
-  string parent = 1;
-}
-
-message ListSiteSourcesResponse {
-  repeated SiteSource resources = 1;
-}
-
-message CreateSiteSourceRequest {
-  string resource_id = 1;
-
-  // Site name
-  string parent = 2;
-
-  SiteSource site_source = 3;
-}
-
-message RefreshSiteSourceRequest {
-  string name = 1;
-}
-
-message RefreshSiteSourceResponse {
 }

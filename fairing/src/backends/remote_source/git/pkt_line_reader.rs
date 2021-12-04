@@ -11,15 +11,15 @@ pub enum GitPktLineOutput {
 }
 
 pub struct GitPktLineReader<'n> {
-    site_source_name: &'n models::SiteSourceName<'n>,
+    source_name: &'n models::SourceName<'n>,
     head_hash: Option<String>,
     capabilities: Option<String>,
 }
 
 impl<'n> GitPktLineReader<'n> {
-    pub fn new(site_source_name: &'n models::SiteSourceName<'n>) -> GitPktLineReader<'n> {
+    pub fn new(source_name: &'n models::SourceName<'n>) -> GitPktLineReader<'n> {
         GitPktLineReader {
-            site_source_name,
+            source_name,
             head_hash: None,
             capabilities: None,
         }
@@ -67,7 +67,7 @@ impl<'n> SshReader for GitPktLineReader<'n> {
                 }
 
                 let layer_set_name =
-                    format!("{}/layersets/{}", self.site_source_name.name(), ref_name);
+                    format!("{}/layersets/{}", self.source_name.name(), ref_name);
                 let build = models::CreateBuild {
                     parent: models::LayerSetName::parse(layer_set_name).unwrap(),
                     source_reference: hash,

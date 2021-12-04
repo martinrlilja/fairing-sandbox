@@ -1,4 +1,4 @@
-use anyhow::Result;
+use anyhow::{Result, Context as _};
 use async_stream::stream;
 use fairing_core::{backends::build_queue, models};
 use futures::Stream;
@@ -30,7 +30,8 @@ impl build_queue::BuildQueueBackend for PostgresDatabase {
                 )
                 .bind(models::BuildStatus::Queued)
                 .fetch_optional(&mut tx)
-                .await?;
+                .await
+                .context("stream builds (next)")?;
 
                 let (layer_set_id, build_name): (Uuid, String) = match build {
                     Some((layer_set_id, build_name)) => (layer_set_id, build_name),
@@ -51,36 +52,36 @@ impl build_queue::BuildQueueBackend for PostgresDatabase {
                 .bind(&build_name)
                 .bind(models::BuildStatus::Building)
                 .execute(&mut tx)
-                .await?;
+                .await
+                .context("stream builds (claim)")?;
 
-                let tree_revision = sqlx::query_as(
+                let build = sqlx::query_as(
                     r"
-                    SELECT 'teams/' || t.name || '/sites/' || s.name || '/sources/' || ss.name || '/layersets/' || ls.name || '/builds/' || b.name AS name,
+                    SELECT 'teams/' || t.name || '/sources/' || src.name || '/layersets/' || ls.name || '/builds/' || b.name AS name,
                         b.created_time, b.layer_id, b.status, b.source_reference
                     FROM builds b
                     JOIN layer_sets ls
                         ON ls.id = b.layer_set_id
-                    JOIN site_sources ss
-                        ON ss.id = ls.site_source_id
-                    JOIN sites s
-                        ON s.id = ss.site_id
+                    JOIN sources src
+                        ON src.id = ls.source_id
                     JOIN teams t
-                        ON t.id = s.team_id
+                        ON t.id = src.team_id
                     WHERE b.layer_set_id = $1 AND b.name = $2;
                     ",
                 )
                 .bind(layer_set_id)
                 .bind(&build_name)
                 .fetch_optional(&mut tx)
-                .await?;
+                .await
+                .context("stream builds (get)")?;
 
                 tx.commit().await?;
 
-                yield Ok(tree_revision.unwrap());
+                yield Ok(build.unwrap());
             }
         };
 
-        // TODO: is there a better way of returning this?
+        // is there a better way of returning this?
         Ok(Box::new(Box::pin(stream)))
     }
 }

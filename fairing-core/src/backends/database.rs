@@ -6,12 +6,17 @@ use crate::models;
 pub type Database = Arc<dyn DatabaseBackend>;
 
 pub trait DatabaseBackend:
-    Debug + UserRepository + TeamRepository + SiteRepository + LayerRepository
+    Debug + UserRepository + TeamRepository + SiteRepository + SourceRepository + LayerRepository
 {
 }
 
 impl<T> DatabaseBackend for T where
-    T: Debug + UserRepository + TeamRepository + SiteRepository + LayerRepository
+    T: Debug
+        + UserRepository
+        + TeamRepository
+        + SiteRepository
+        + SourceRepository
+        + LayerRepository
 {
 }
 
@@ -52,6 +57,15 @@ pub trait TeamRepository: Send + Sync {
 }
 
 #[async_trait::async_trait]
+pub trait SourceRepository: Send + Sync {
+    async fn list_sources(&self, team_name: &models::TeamName) -> Result<Vec<models::Source>>;
+
+    async fn get_source(&self, source_name: &models::SourceName) -> Result<Option<models::Source>>;
+
+    async fn create_source(&self, source: &models::CreateSource) -> Result<models::Source>;
+}
+
+#[async_trait::async_trait]
 pub trait SiteRepository: Send + Sync {
     async fn list_sites(&self, team_name: &models::TeamName) -> Result<Vec<models::Site>>;
 
@@ -60,28 +74,13 @@ pub trait SiteRepository: Send + Sync {
     async fn create_site(&self, site: &models::CreateSite) -> Result<models::Site>;
 
     async fn delete_site(&self, site_name: &models::SiteName) -> Result<()>;
-
-    async fn list_site_sources(
-        &self,
-        site_name: &models::SiteName,
-    ) -> Result<Vec<models::SiteSource>>;
-
-    async fn get_site_source(
-        &self,
-        site_source_name: &models::SiteSourceName,
-    ) -> Result<Option<models::SiteSource>>;
-
-    async fn create_site_source(
-        &self,
-        site_source: &models::CreateSiteSource,
-    ) -> Result<models::SiteSource>;
 }
 
 #[async_trait::async_trait]
 pub trait LayerRepository: Send + Sync {
     async fn list_layer_sets(
         &self,
-        site_source_name: &models::SiteSourceName,
+        source_name: &models::SourceName,
     ) -> Result<Vec<models::LayerSet>>;
 
     async fn get_layer_set(

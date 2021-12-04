@@ -3,8 +3,8 @@ use fairing_core::{
     models::{self, prelude::*},
 };
 use fairing_proto::{
-    sites::v1beta1::sites_server::SitesServer, teams::v1beta1::teams_server::TeamsServer,
-    users::v1beta1::users_server::UsersServer,
+    sites::v1beta1::sites_server::SitesServer, sources::v1beta1::sources_server::SourcesServer,
+    teams::v1beta1::teams_server::TeamsServer, users::v1beta1::users_server::UsersServer,
 };
 use std::net::SocketAddr;
 use tonic::{
@@ -13,6 +13,7 @@ use tonic::{
 };
 
 mod sites;
+mod sources;
 mod teams;
 mod users;
 
@@ -34,11 +35,17 @@ pub async fn api_server(
     let sites_server =
         SitesServer::with_interceptor(sites::SitesService::new(&database), auth.interceptor());
 
+    let sources_server = SourcesServer::with_interceptor(
+        sources::SourcesService::new(&database),
+        auth.interceptor(),
+    );
+
     Server::builder()
         .accept_http1(true)
         .add_service(web_config.enable(users_server))
         .add_service(web_config.enable(teams_server))
         .add_service(web_config.enable(sites_server))
+        .add_service(web_config.enable(sources_server))
         .serve(addr)
         .await
 }

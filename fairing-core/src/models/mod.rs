@@ -4,6 +4,7 @@ pub use builds::*;
 pub use files::*;
 pub use layers::*;
 pub use sites::*;
+pub use sources::*;
 pub use teams::*;
 pub use users::*;
 
@@ -13,6 +14,7 @@ mod layers;
 pub mod prelude;
 pub mod resource_name;
 mod sites;
+mod sources;
 mod teams;
 mod users;
 

@@ -4,6 +4,12 @@ pub mod sites {
     }
 }
 
+pub mod sources {
+    pub mod v1beta1 {
+        tonic::include_proto!("fairing.sources.v1beta1");
+    }
+}
+
 pub mod teams {
     pub mod v1beta1 {
         tonic::include_proto!("fairing.teams.v1beta1");

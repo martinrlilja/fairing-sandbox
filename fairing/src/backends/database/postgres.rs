@@ -115,7 +115,8 @@ impl PostgresDatabase {
         .bind(&team.created_time)
         .bind(&team.file_keyspace_id)
         .execute(&mut *tx)
-        .await?;
+        .await
+        .context("create team")?;
 
         sqlx::query(
             r"
@@ -129,7 +130,8 @@ impl PostgresDatabase {
         .bind(&team_member.name.resource())
         .bind(&team_member.created_time)
         .execute(&mut *tx)
-        .await?;
+        .await
+        .context("create team (owner)")?;
 
         Ok(team)
     }
@@ -148,7 +150,8 @@ impl database::UserRepository for PostgresDatabase {
         )
         .bind(user_name.resource())
         .fetch_optional(&self.pool)
-        .await?;
+        .await
+        .context("get user")?;
 
         Ok(user)
     }
@@ -173,7 +176,8 @@ impl database::UserRepository for PostgresDatabase {
         .bind(&password_hash)
         .bind(&user.created_time)
         .execute(&mut tx)
-        .await?;
+        .await
+        .context("create user")?;
 
         //self.create_team(&mut tx, &team).await?;
 
@@ -197,7 +201,8 @@ impl database::UserRepository for PostgresDatabase {
         )
         .bind(user_name.resource())
         .fetch_optional(&self.pool)
-        .await?;
+        .await
+        .context("verify user password")?;
 
         if let Some(password_hash) = password_hash {
             password.verify(&password_hash)
@@ -225,7 +230,8 @@ impl database::TeamRepository for PostgresDatabase {
         )
         .bind(user_name.resource())
         .fetch_all(&self.pool)
-        .await?;
+        .await
+        .context("list teams")?;
 
         Ok(teams)
     }
@@ -242,7 +248,8 @@ impl database::TeamRepository for PostgresDatabase {
         )
         .bind(team_name.resource())
         .fetch_optional(&self.pool)
-        .await?;
+        .await
+        .context("get team")?;
 
         Ok(team)
     }
@@ -253,7 +260,7 @@ impl database::TeamRepository for PostgresDatabase {
 
         let team = self.create_team(&mut tx, &team).await?;
 
-        tx.commit().await?;
+        tx.commit().await.context("create team (commit)")?;
 
         Ok(team)
     }
@@ -268,7 +275,8 @@ impl database::TeamRepository for PostgresDatabase {
         )
         .bind(team_name.resource())
         .execute(&self.pool)
-        .await?;
+        .await
+        .context("delete team")?;
 
         Ok(())
     }
@@ -292,7 +300,8 @@ impl database::TeamRepository for PostgresDatabase {
         )
         .bind(team_name.resource())
         .fetch_all(&self.pool)
-        .await?;
+        .await
+        .context("list team members")?;
 
         Ok(teams)
     }
@@ -317,7 +326,8 @@ impl database::TeamRepository for PostgresDatabase {
         .bind(team_member.name.parent().resource())
         .bind(team_member.name.resource())
         .execute(&self.pool)
-        .await?;
+        .await
+        .context("create team member")?;
 
         ensure!(
             query_result.rows_affected() == 1,
@@ -342,7 +352,8 @@ impl database::TeamRepository for PostgresDatabase {
         .bind(team_member_name.parent().resource())
         .bind(team_member_name.resource())
         .execute(&self.pool)
-        .await?;
+        .await
+        .context("delete team member")?;
 
         Ok(())
     }
@@ -353,8 +364,11 @@ impl database::SiteRepository for PostgresDatabase {
     async fn list_sites(&self, team_name: &models::TeamName) -> Result<Vec<models::Site>> {
         let sites = sqlx::query_as(
             r"
-            SELECT 'teams/' || t.name || '/sites/' || s.name AS name, s.created_time
+            SELECT 'teams/' || t.name || '/sites/' || s.name AS name, s.created_time,
+                    'teams/' || t.name || '/source/' || src.name AS base_source
             FROM sites s
+            JOIN source src
+                ON t.id = src.team_id AND src.id = s.base_source_id
             JOIN teams t
                 ON t.id = s.team_id
             WHERE t.name = $1;
@@ -362,7 +376,8 @@ impl database::SiteRepository for PostgresDatabase {
         )
         .bind(team_name.resource())
         .fetch_all(&self.pool)
-        .await?;
+        .await
+        .context("list sites")?;
 
         Ok(sites)
     }
@@ -371,7 +386,10 @@ impl database::SiteRepository for PostgresDatabase {
         let site = sqlx::query_as(
             r"
             SELECT 'teams/' || t.name || '/sites/' || s.name AS name, s.created_time
+                    'teams/' || t.name || '/source/' || src.name AS base_source
             FROM sites s
+            JOIN source src
+                ON t.id = src.team_id AND src.id = s.base_source_id
             JOIN teams t
                 ON t.id = s.team_id
             WHERE t.name = $1 AND s.name = $2;
@@ -380,7 +398,8 @@ impl database::SiteRepository for PostgresDatabase {
         .bind(site_name.parent().resource())
         .bind(site_name.resource())
         .fetch_optional(&self.pool)
-        .await?;
+        .await
+        .context("get site")?;
 
         Ok(site)
     }
@@ -391,20 +410,24 @@ impl database::SiteRepository for PostgresDatabase {
 
         let query_result = sqlx::query(
             r"
-            INSERT INTO sites (id, created_time, name, team_id)
-            SELECT $1, $2, $3, t.id
-            FROM teams t
-            WHERE t.name = $4;
+            INSERT INTO sites (id, created_time, name, team_id, base_source_id)
+            SELECT $1, $2, $3, src.team_id, src.id
+            FROM sources src
+            JOIN teams t
+                ON t.id = src.team_id
+            WHERE t.name = $4 AND src.name = $5;
             ",
         )
         .bind(&site_id)
         .bind(&site.created_time)
         .bind(site.name.resource())
         .bind(site.name.parent().resource())
+        .bind(site.base_source.resource())
         .execute(&self.pool)
-        .await?;
+        .await
+        .context("create site")?;
 
-        ensure!(query_result.rows_affected() == 1, "site parent not found");
+        ensure!(query_result.rows_affected() == 1, "site parent or base source not found");
 
         Ok(site)
     }
@@ -412,117 +435,103 @@ impl database::SiteRepository for PostgresDatabase {
     async fn delete_site(&self, _site_name: &models::SiteName) -> Result<()> {
         todo!();
     }
+}
 
-    async fn list_site_sources(
-        &self,
-        site_name: &models::SiteName,
-    ) -> Result<Vec<models::SiteSource>> {
-        let site_sources = sqlx::query_as(
+#[async_trait::async_trait]
+impl database::SourceRepository for PostgresDatabase {
+    async fn list_sources(&self, team_name: &models::TeamName) -> Result<Vec<models::Source>> {
+        let sources = sqlx::query_as(
             r"
-            SELECT 'teams/' || t.name || '/sites/' || s.name || '/sources/' || ss.name AS name,
-                    ss.created_time, ss.hook_token, ss.last_refresh_time,
-                    ss_git.repository_url AS git_repository_url,
-                    ss_git.id_ed25519_secret_key AS git_id_ed25519_secret_key
-            FROM site_sources ss
-            LEFT JOIN site_source_git ss_git
-                ON ss_git.site_source_id = ss.id
-            JOIN sites s
-                ON s.id = ss.site_id
+            SELECT 'teams/' || t.name || '/sources/' || src.name AS name,
+                    src.created_time, src.hook_token, src.last_refresh_time,
+                    src_git.repository_url AS git_repository_url,
+                    src_git.id_ed25519_secret_key AS git_id_ed25519_secret_key
+            FROM sources src
+            LEFT JOIN source_git src_git
+                ON src_git.source_id = src.id
             JOIN teams t
-                ON t.id = s.team_id
-            WHERE t.name = $1 AND s.name = $2;
+                ON t.id = src.team_id
+            WHERE t.name = $1;
             ",
         )
-        .bind(site_name.parent().resource())
-        .bind(site_name.resource())
+        .bind(team_name.resource())
         .fetch_all(&self.pool)
-        .await?;
+        .await
+        .context("list sources")?;
 
-        Ok(site_sources)
+        Ok(sources)
     }
 
-    async fn get_site_source(
-        &self,
-        site_source_name: &models::SiteSourceName,
-    ) -> Result<Option<models::SiteSource>> {
-        let site_source = sqlx::query_as(
+    async fn get_source(&self, source_name: &models::SourceName) -> Result<Option<models::Source>> {
+        let source = sqlx::query_as(
             r"
-            SELECT 'teams/' || t.name || '/sites/' || s.name || '/sources/' || ss.name AS name,
-                    ss.created_time, ss.hook_token, ss.last_refresh_time,
-                    ss_git.repository_url AS git_repository_url,
-                    ss_git.id_ed25519_secret_key AS git_id_ed25519_secret_key
-            FROM site_sources ss
-            LEFT JOIN site_source_git ss_git
-                ON ss_git.site_source_id = ss.id
-            JOIN sites s
-                ON s.id = ss.site_id
+            SELECT 'teams/' || t.name || '/sources/' || src.name AS name,
+                    src.created_time, src.hook_token, src.last_refresh_time,
+                    src_git.repository_url AS git_repository_url,
+                    src_git.id_ed25519_secret_key AS git_id_ed25519_secret_key
+            FROM sources src
+            LEFT JOIN source_git src_git
+                ON src_git.source_id = src.id
             JOIN teams t
-                ON t.id = s.team_id
-            WHERE t.name = $1 AND s.name = $2 AND ss.name = $3;
+                ON t.id = src.team_id
+            WHERE t.name = $1 AND src.name = $2;
             ",
         )
-        .bind(site_source_name.parent().parent().resource())
-        .bind(site_source_name.parent().resource())
-        .bind(site_source_name.resource())
+        .bind(source_name.parent().resource())
+        .bind(source_name.resource())
         .fetch_optional(&self.pool)
-        .await?;
+        .await
+        .context("get source")?;
 
-        Ok(site_source)
+        Ok(source)
     }
 
-    async fn create_site_source(
-        &self,
-        site_source: &models::CreateSiteSource,
-    ) -> Result<models::SiteSource> {
-        let site_source = site_source.create()?;
-        let site_source_id = Uuid::new_v4();
+    async fn create_source(&self, source: &models::CreateSource) -> Result<models::Source> {
+        let source = source.create()?;
+        let source_id = Uuid::new_v4();
 
         let mut tx = self.pool.begin().await?;
 
         let query_result = sqlx::query(
             r"
-            INSERT INTO site_sources (id, created_time, name, site_id, hook_token)
-            SELECT $1, $2, $3, s.id, $4
-            FROM sites s
-            JOIN teams t
-                ON t.id = s.team_id
-            WHERE t.name = $5 AND s.name = $6;
+            INSERT INTO sources (id, created_time, name, team_id, hook_token)
+            SELECT $1, $2, $3, t.id, $4
+            FROM teams t
+            WHERE t.name = $5;
             ",
         )
-        .bind(&site_source_id)
-        .bind(&site_source.created_time)
-        .bind(site_source.name.resource())
-        .bind(&site_source.hook_token)
-        .bind(site_source.name.parent().parent().resource())
-        .bind(site_source.name.parent().resource())
+        .bind(&source_id)
+        .bind(&source.created_time)
+        .bind(source.name.resource())
+        .bind(&source.hook_token)
+        .bind(source.name.parent().resource())
         .execute(&mut tx)
-        .await?;
+        .await
+        .context("create source")?;
 
-        ensure!(
-            query_result.rows_affected() == 1,
-            "site source parent not found"
-        );
+        ensure!(query_result.rows_affected() == 1, "source parent not found");
 
-        match site_source.kind {
-            Some(models::SiteSourceKind::GitSource(ref git_source)) => {
+        match source.kind {
+            Some(models::SourceKind::GitSource(ref git_source)) => {
                 sqlx::query(
                     r"
-                    INSERT INTO site_source_git (site_source_id, repository_url, id_ed25519_secret_key)
+                    INSERT INTO source_git (source_id, repository_url, id_ed25519_secret_key)
                     VALUES ($1, $2, $3);
                     ",
                 )
-                .bind(&site_source_id)
+                .bind(&source_id)
                 .bind(&git_source.repository_url.as_str())
                 .bind(&git_source.id_ed25519.secret_key_to_slice())
                 .execute(&mut tx)
-                .await?;
+                .await
+                .context("create source (git)")?;
             }
             None => (),
         }
 
-        tx.commit().await?;
+        tx.commit().await.context("create source (commit)")?;
 
-        Ok(site_source)
+        Ok(source)
     }
 }
 
@@ -530,27 +539,25 @@ impl database::SiteRepository for PostgresDatabase {
 impl database::LayerRepository for PostgresDatabase {
     async fn list_layer_sets(
         &self,
-        site_source_name: &models::SiteSourceName,
+        source_name: &models::SourceName,
     ) -> Result<Vec<models::LayerSet>> {
         let layer_sets = sqlx::query_as(
             r"
-            SELECT 'teams/' || t.name || '/sites/' || s.name || '/sources/' || ss.name || '/layersets/' || ls.name AS name,
+            SELECT 'teams/' || t.name || '/sources/' || src.name || '/layersets/' || ls.name AS name,
                     ls.created_time
             FROM layer_sets ls
-            JOIN site_sources ss
-                ON ss.id = ls.site_source_id
-            JOIN sites s
-                ON s.id = ss.site_id
+            JOIN sources src
+                ON src.id = ls.source_id
             JOIN teams t
-                ON t.id = s.team_id
-            WHERE t.name = $1 AND s.name = $2 AND ss.name = $3;
+                ON t.id = src.team_id
+            WHERE t.name = $1 AND src.name = $2;
             ",
         )
-        .bind(site_source_name.parent().parent().resource())
-        .bind(site_source_name.parent().resource())
-        .bind(site_source_name.resource())
+        .bind(source_name.parent().resource())
+        .bind(source_name.resource())
         .fetch_all(&self.pool)
-        .await?;
+        .await
+        .context("listing layer sets")?;
 
         Ok(layer_sets)
     }
@@ -561,24 +568,22 @@ impl database::LayerRepository for PostgresDatabase {
     ) -> Result<Option<models::LayerSet>> {
         let layer_set = sqlx::query_as(
             r"
-            SELECT ls.id, 'teams/' || t.name || '/sites/' || s.name || '/sources/' || ss.name || '/layersets/' || ls.name AS name,
+            SELECT ls.id, 'teams/' || t.name || '/sources/' || src.name || '/layersets/' || ls.name AS name,
                     ls.created_time
             FROM layer_sets ls
-            JOIN site_sources ss
-                ON ss.id = ls.site_source_id
-            JOIN sites s
-                ON s.id = ss.site_id
+            JOIN sources src
+                ON src.id = ls.source_id
             JOIN teams t
-                ON t.id = s.team_id
-            WHERE t.name = $1 AND s.name = $2 AND ss.name = $3 AND ls.name = $4;
+                ON t.id = src.team_id
+            WHERE t.name = $1 AND src.name = $2 AND ls.name = $3;
             ",
         )
-        .bind(layer_set_name.parent().parent().parent().resource())
         .bind(layer_set_name.parent().parent().resource())
         .bind(layer_set_name.parent().resource())
         .bind(layer_set_name.resource())
         .fetch_optional(&self.pool)
-        .await?;
+        .await
+        .context("getting layer set")?;
 
         Ok(layer_set)
     }
@@ -595,21 +600,18 @@ impl database::LayerRepository for PostgresDatabase {
 
         sqlx::query(
             r"
-            INSERT INTO layer_sets (id, created_time, name, site_source_id)
-            SELECT $1, $2, $3, ss.id
-            FROM site_sources ss
-            JOIN sites s
-                ON s.id = ss.site_id
+            INSERT INTO layer_sets (id, created_time, name, source_id)
+            SELECT $1, $2, $3, src.id
+            FROM sources src
             JOIN teams t
-                ON t.id = s.team_id
-            WHERE t.name = $4 AND s.name = $5 AND ss.name = $6
-            ON CONFLICT (site_source_id, name) DO NOTHING;
+                ON t.id = src.team_id
+            WHERE t.name = $4 AND src.name = $5
+            ON CONFLICT (source_id, name) DO NOTHING;
             ",
         )
         .bind(layer_set.id)
         .bind(layer_set.created_time)
         .bind(layer_set.name.resource())
-        .bind(layer_set.name.parent().parent().parent().resource())
         .bind(layer_set.name.parent().parent().resource())
         .bind(layer_set.name.parent().resource())
         .execute(&mut tx)
@@ -623,13 +625,11 @@ impl database::LayerRepository for PostgresDatabase {
             INSERT INTO builds (id, created_time, name, layer_set_id, layer_id, status, source_reference)
             SELECT $1, $2, $3, ls.id, $4, $5, $6
             FROM layer_sets ls
-            JOIN site_sources ss
-                ON ss.id = ls.site_source_id
-            JOIN sites s
-                ON s.id = ss.site_id
+            JOIN sources src
+                ON src.id = ls.source_id
             JOIN teams t
-                ON t.id = s.team_id
-            WHERE t.name = $7 AND s.name = $8 AND ss.name = $9 AND ls.name = $10;
+                ON t.id = src.team_id
+            WHERE t.name = $7 AND src.name = $8 AND ls.name = $9;
             ",
         )
         .bind(uuid::Uuid::new_v4())
@@ -638,23 +638,13 @@ impl database::LayerRepository for PostgresDatabase {
         .bind(build.layer_id)
         .bind(build.status)
         .bind(&build.source_reference)
-        .bind(
-            build
-                .name
-                .parent()
-                .parent()
-                .parent()
-                .parent()
-                .resource(),
-        )
         .bind(build.name.parent().parent().parent().resource())
         .bind(build.name.parent().parent().resource())
         .bind(build.name.parent().resource())
         .execute(&mut tx)
         .await
-        .context("inserting tree revision")?;
+        .context("inserting build")?;
 
-        // TODO: handle version conflicts on commit.
         tx.commit().await?;
 
         Ok(build)

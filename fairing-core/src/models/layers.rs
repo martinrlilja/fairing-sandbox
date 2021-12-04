@@ -17,7 +17,7 @@ impl<'n> ParentedResourceName<'n> for LayerSetName<'n> {
     // FIXME: restrict this.
     type Validator = validators::AnyValidator;
 
-    type Parent = models::SiteSourceName<'static>;
+    type Parent = models::SourceName<'static>;
 }
 
 #[derive(Copy, Clone, Debug, sqlx::Type)]
@@ -33,7 +33,7 @@ pub struct LayerSet {
 
 pub struct CreateLayerSet<'a> {
     pub resource_id: &'a str,
-    pub parent: models::SiteSourceName<'static>,
+    pub parent: models::SourceName<'static>,
 }
 
 impl<'a> CreateLayerSet<'a> {

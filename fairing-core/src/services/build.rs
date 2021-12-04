@@ -7,7 +7,7 @@ use std::{
 use tokio::{fs, task};
 
 use crate::{
-    backends::{BuildQueue, Database, FileMetadata, RemoteSiteSource},
+    backends::{BuildQueue, Database, FileMetadata, RemoteSource},
     models::{self, prelude::*},
     services::Storage,
 };
@@ -33,14 +33,14 @@ impl BuildServiceBuilder {
         build_queue: BuildQueue,
         database: Database,
         file_metadata: FileMetadata,
-        remote_site_source: RemoteSiteSource,
+        remote_source: RemoteSource,
         storage: Storage,
     ) -> BuildService {
         BuildService {
             build_queue,
             database,
             file_metadata,
-            remote_site_source,
+            remote_source,
             storage,
             concurrent_builds: self.concurrent_builds,
             build_tasks: FuturesUnordered::new(),
@@ -52,7 +52,7 @@ pub struct BuildService {
     build_queue: BuildQueue,
     database: Database,
     file_metadata: FileMetadata,
-    remote_site_source: RemoteSiteSource,
+    remote_source: RemoteSource,
     storage: Storage,
     concurrent_builds: usize,
     build_tasks: FuturesUnordered<task::JoinHandle<()>>,
@@ -68,7 +68,7 @@ impl BuildService {
             let build_task = BuildTask {
                 database: self.database.clone(),
                 file_metadata: self.file_metadata.clone(),
-                remote_site_source: self.remote_site_source.clone(),
+                remote_source: self.remote_source.clone(),
                 storage: self.storage.clone(),
                 build,
             };
@@ -96,7 +96,7 @@ impl BuildService {
 struct BuildTask {
     database: Database,
     file_metadata: FileMetadata,
-    remote_site_source: RemoteSiteSource,
+    remote_source: RemoteSource,
     storage: Storage,
     build: models::Build,
 }
@@ -110,10 +110,10 @@ impl BuildTask {
             .await?
             .ok_or_else(|| anyhow!("layer set not found"))?;
 
-        let site_source_name = self.build.name.parent().parent();
-        let site_source = self
+        let source_name = self.build.name.parent().parent();
+        let source = self
             .database
-            .get_site_source(&site_source_name)
+            .get_source(&source_name)
             .await?
             .ok_or_else(|| anyhow!("site source not found"))?;
 
@@ -124,8 +124,8 @@ impl BuildTask {
         fs::create_dir(&work_directory).await?;
 
         let source_directory = self
-            .remote_site_source
-            .fetch(&site_source, &self.build, work_directory)
+            .remote_source
+            .fetch(&source, &self.build, work_directory)
             .await?;
 
         let source_directory = fs::canonicalize(source_directory).await?;
@@ -136,7 +136,7 @@ impl BuildTask {
 
         tracing::debug!("build file: {:?}", build_file);
 
-        let team_name = site_source_name.parent().parent();
+        let team_name = source_name.parent();
         let team = self
             .database
             .get_team(&team_name)

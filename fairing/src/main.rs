@@ -29,7 +29,7 @@ async fn main() -> Result<()> {
 
         let file_storage = backends::LocalFileStorage::open(".data").await?;
 
-        let remote_site_source = backends::GenericRemoteSiteSource::new();
+        let remote_source = backends::GenericRemoteSource::new();
 
         let storage = Storage::new(file_storage, database.file_metadata());
 
@@ -37,7 +37,7 @@ async fn main() -> Result<()> {
             database.build_queue(),
             database.database(),
             database.file_metadata(),
-            remote_site_source,
+            remote_source,
             storage.clone(),
         );
 

@@ -1,4 +1,4 @@
-use anyhow::Result;
+use anyhow::{Result, anyhow};
 use clap::{crate_version, App, AppSettings, Arg, ArgMatches, SubCommand};
 use tonic::{
     metadata::{AsciiMetadataValue, MetadataValue},
@@ -53,23 +53,30 @@ async fn main() -> Result<()> {
                                 .help("Resource ID of this site. RFC1035-like names are accepted. Must start with a letter, no double dashes."),
                         )
                         .arg(
+                            Arg::with_name("source")
+                                .long("source")
+                                .value_name("source-name")
+                                .takes_value(true)
+                                .help("Use this source as the site's base source."),
+                        )
+                        .arg(
                             Arg::with_name("git")
                                 .long("git")
                                 .value_name("repository-url")
                                 .takes_value(true)
-                                .help("Creates a git source for the site."),
+                                .help("Creates a git source for the site's base source."),
                         ),
-                )
-                .subcommand(
-                    SubCommand::with_name("sources")
-                        .about("Site source management")
-                        .setting(AppSettings::SubcommandRequiredElseHelp)
-                        .subcommand(
-                            SubCommand::with_name("refresh")
-                            .about("Refresh site source")
-                            .arg(Arg::with_name("site-source")),
-                        )
                 ),
+        )
+        .subcommand(
+            SubCommand::with_name("sources")
+            .about("Source management")
+            .setting(AppSettings::SubcommandRequiredElseHelp)
+            .subcommand(
+                SubCommand::with_name("refresh")
+                .about("Refresh source")
+                .arg(Arg::with_name("source")),
+            )
         )
         .get_matches();
 
@@ -85,6 +92,8 @@ async fn main() -> Result<()> {
         command_teams(&matches).await?;
     } else if let Some(matches) = matches.subcommand_matches("sites") {
         command_sites(&matches).await?;
+    } else if let Some(matches) = matches.subcommand_matches("sources") {
+        command_sources(&matches).await?;
     }
 
     Ok(())
@@ -219,44 +228,39 @@ async fn command_teams(matches: &ArgMatches<'_>) -> Result<()> {
 
 async fn command_sites(matches: &ArgMatches<'_>) -> Result<()> {
     use fairing_proto::sites::v1beta1::{
-        site_source, sites_client::SitesClient, CreateSiteRequest, CreateSiteSourceRequest,
-        ListSitesRequest, RefreshSiteSourceRequest, SiteSource,
+        sites_client::SitesClient, CreateSiteRequest, ListSitesRequest,
+    };
+    use fairing_proto::sources::v1beta1::{
+        source, sources_client::SourcesClient, CreateSourceRequest, Source,
     };
 
     let channel = Channel::from_static("http://[::1]:8000").connect().await?;
     let auth = ConfigAuth::read().await?;
 
-    let mut sites_client = SitesClient::with_interceptor(channel, auth);
+    let mut sites_client = SitesClient::with_interceptor(channel.clone(), auth.clone());
+    let mut sources_clinent = SourcesClient::with_interceptor(channel, auth);
 
     if let Some(matches) = matches.subcommand_matches("create") {
-        let resource_id = matches
-            .value_of("resource-id")
-            .expect("team resource id must be set");
-
         let parent = matches.value_of("team").expect("team name must be set");
 
-        let response = sites_client
-            .create_site(CreateSiteRequest {
-                resource_id: resource_id.into(),
-                parent: parent.into(),
-            })
-            .await?;
+        let resource_id = matches
+            .value_of("resource-id")
+            .expect("site resource id must be set");
 
-        println!("Created site: {}", response.get_ref().name);
-
-        if let Some(repository_url) = matches.value_of("git") {
-            let git_source = site_source::GitSource {
+        let base_source = if let Some(source_name) = matches.value_of("source") {
+            source_name.to_owned()
+        } else if let Some(repository_url) = matches.value_of("git") {
+            let git_source = source::GitSource {
                 repository_url: repository_url.to_owned(),
                 ..Default::default()
             };
 
-            let response = sites_client
-                .create_site_source(CreateSiteSourceRequest {
-                    parent: response.get_ref().name.clone(),
-                    // TODO: consider using the domain name of the repository here.
-                    resource_id: "git".to_owned(),
-                    site_source: Some(SiteSource {
-                        kind: Some(site_source::Kind::GitSource(git_source)),
+            let response = sources_clinent
+                .create_source(CreateSourceRequest {
+                    parent: parent.into(),
+                    resource_id: format!("{}-git", resource_id),
+                    source: Some(Source {
+                        kind: Some(source::Kind::GitSource(git_source)),
                         ..Default::default()
                     }),
                 })
@@ -265,10 +269,24 @@ async fn command_sites(matches: &ArgMatches<'_>) -> Result<()> {
             println!("Created site source: {}", response.get_ref().name);
             println!("Hook URL: {}", response.get_ref().hook_url);
 
-            if let Some(site_source::Kind::GitSource(ref git_source)) = response.get_ref().kind {
+            if let Some(source::Kind::GitSource(ref git_source)) = response.get_ref().kind {
                 println!("id_ed25519.pub: {}", git_source.id_ed25519_pub.trim());
             }
-        }
+
+            response.get_ref().name.clone()
+        } else {
+            return Err(anyhow!("A base source must be set, use --source or --git, for help use --help."));
+        };
+
+        let response = sites_client
+            .create_site(CreateSiteRequest {
+                resource_id: resource_id.into(),
+                parent: parent.into(),
+                base_source,
+            })
+            .await?;
+
+        println!("Created site: {}", response.get_ref().name);
     } else if let Some(matches) = matches.subcommand_matches("list") {
         let parent = matches.value_of("team").expect("team name must be set");
 
@@ -287,23 +305,38 @@ async fn command_sites(matches: &ArgMatches<'_>) -> Result<()> {
         for site in response.get_ref().resources.iter() {
             println!("{}", site.name);
         }
-    } else if let Some(matches) = matches.subcommand_matches("sources") {
-        if let Some(matches) = matches.subcommand_matches("refresh") {
-            let name = matches
-                .value_of("site-source")
-                .expect("site source name must be set");
-
-            let _response = sites_client
-                .refresh_site_source(RefreshSiteSourceRequest { name: name.into() })
-                .await?;
-
-            println!("Refreshed site source");
-        }
     }
 
     Ok(())
 }
 
+async fn command_sources(matches: &ArgMatches<'_>) -> Result<()> {
+    use fairing_proto::sources::v1beta1::{
+        sources_client::SourcesClient,
+        RefreshSourceRequest,
+    };
+
+    let channel = Channel::from_static("http://[::1]:8000").connect().await?;
+    let auth = ConfigAuth::read().await?;
+
+    let mut sources_client = SourcesClient::with_interceptor(channel, auth);
+
+    if let Some(matches) = matches.subcommand_matches("refresh") {
+        let name = matches
+            .value_of("source")
+            .expect("source name must be set");
+
+        let _response = sources_client
+            .refresh_source(RefreshSourceRequest { name: name.into() })
+            .await?;
+
+        println!("Refreshed source");
+    }
+
+    Ok(())
+}
+
+#[derive(Clone)]
 struct ConfigAuth {
     token: AsciiMetadataValue,
 }
