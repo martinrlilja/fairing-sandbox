@@ -1,4 +1,4 @@
-use anyhow::{Result, Context as _};
+use anyhow::{Context as _, Result};
 use fairing_core::{backends::file_metadata, models};
 
 use crate::backends::PostgresDatabase;
@@ -102,7 +102,7 @@ impl file_metadata::FileMetadataRepository for PostgresDatabase {
             ON CONFLICT (file_keyspace, checksum) DO NOTHING;
             "#,
         )
-        .bind(&file_id.0 .0)
+        .bind(&file_id.0)
         .bind(&file_id.1)
         .bind(&file.checksum)
         .bind(&file.is_valid_utf8)
@@ -119,7 +119,7 @@ impl file_metadata::FileMetadataRepository for PostgresDatabase {
                 WHERE file_keyspace = $1 AND file_checksum = $2;
                 ",
             )
-            .bind(&file_id.0 .0)
+            .bind(&file_id.0)
             .bind(&file_id.1)
             .bind(&file.checksum)
             .execute(&mut tx)
@@ -134,7 +134,7 @@ impl file_metadata::FileMetadataRepository for PostgresDatabase {
             WHERE file_keyspace = $1 AND checksum = $2;
             ",
         )
-        .bind(&file_id.0 .0)
+        .bind(&file_id.0)
         .bind(&file_id.1)
         .execute(&mut tx)
         .await
@@ -152,7 +152,7 @@ impl file_metadata::FileMetadataRepository for PostgresDatabase {
             VALUES ($1, $2, $3, $4, $5);
             "#,
         )
-        .bind(&file_chunk.file_id.0.0)
+        .bind(&file_chunk.file_id.0)
         .bind(&file_chunk.file_id.1)
         .bind(&file_chunk.start_byte_offset)
         .bind(&file_chunk.end_byte_offset)
@@ -163,19 +163,19 @@ impl file_metadata::FileMetadataRepository for PostgresDatabase {
         Ok(())
     }
 
-    async fn create_tree_leaf(&self, tree_leaf: &models::CreateTreeLeaf) -> Result<()> {
+    async fn create_layer_member(&self, layer_member: &models::CreateLayerMember) -> Result<()> {
         sqlx::query(
             r#"
-            INSERT INTO tree_leaves (tree_id, version, path, file_keyspace, file_checksum)
+            INSERT INTO layer_members (layer_set_id, layer_id, path, file_keyspace, file_checksum)
             VALUES ($1, $2, $3, $4, $5);
             "#,
         )
-        .bind(&tree_leaf.tree_id.0)
-        .bind(&tree_leaf.version)
-        .bind(&tree_leaf.path)
-        .bind(&tree_leaf.file_id.as_ref().map(|file_id| file_id.0 .0))
+        .bind(&layer_member.layer_set_id)
+        .bind(&layer_member.layer_id)
+        .bind(&layer_member.path)
+        .bind(&layer_member.file_id.as_ref().map(|file_id| file_id.0))
         .bind(
-            &tree_leaf
+            &layer_member
                 .file_id
                 .as_ref()
                 .map(|file_id| file_id.1.as_slice()),

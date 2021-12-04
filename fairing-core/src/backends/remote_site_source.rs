@@ -14,12 +14,12 @@ pub trait RemoteSiteSourceRepository: Send + Sync {
     async fn list_tree_revisions(
         &self,
         site_source: &models::SiteSource,
-    ) -> Result<Vec<models::CreateTreeRevision>>;
+    ) -> Result<Vec<models::CreateBuild>>;
 
-    async fn fetch<'n>(
+    async fn fetch(
         &self,
         site_source: &models::SiteSource,
-        fetch_tree_revision: &models::TreeRevisionName<'n>,
+        build: &models::Build,
         work_directory: PathBuf,
     ) -> Result<PathBuf>;
 }

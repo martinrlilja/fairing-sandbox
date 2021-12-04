@@ -26,7 +26,7 @@ impl Storage {
         file_keyspace: &models::FileKeyspace,
         file_size: i64,
         file_stream: impl Stream<Item = Result<impl AsRef<[u8]>, std::io::Error>> + Unpin,
-    ) -> Result<()> {
+    ) -> Result<models::FileId> {
         use blake2::{Blake2b, Digest};
         use fastcdc::FastCDC;
 
@@ -137,8 +137,7 @@ impl Storage {
 
         let checksum = hasher.finalize();
 
-        let file = self
-            .file_metadata
+        self.file_metadata
             .finalize_file(
                 &file.id,
                 &models::FinalizeFile {
@@ -148,7 +147,7 @@ impl Storage {
             )
             .await?;
 
-        Ok(file)
+        Ok(models::FileId(file_keyspace.id, checksum.to_vec()))
     }
 
     async fn store_blob(&self, data: &[u8]) -> Result<models::CreateBlob> {

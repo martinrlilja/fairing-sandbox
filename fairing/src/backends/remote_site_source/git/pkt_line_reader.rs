@@ -1,5 +1,3 @@
-use std::borrow::Cow;
-
 use fairing_core::models::{self, prelude::*};
 
 use super::{
@@ -8,7 +6,7 @@ use super::{
 };
 
 pub enum GitPktLineOutput {
-    RefPkt(models::CreateTreeRevision<'static>),
+    RefPkt(models::CreateBuild),
     Flush,
 }
 
@@ -63,19 +61,19 @@ impl<'n> SshReader for GitPktLineReader<'n> {
                 let ref_name = ref_name.replace('/', ":");
                 let hash = hash.to_owned();
 
-                let status = match self.head_hash {
-                    Some(ref head_hash) if head_hash == &hash => models::TreeRevisionStatus::Fetch,
-                    _ => models::TreeRevisionStatus::Ignore,
+                match self.head_hash {
+                    Some(ref head_hash) if head_hash == &hash => (),
+                    _ => return Ok((input, None)),
+                }
+
+                let layer_set_name =
+                    format!("{}/layersets/{}", self.site_source_name.name(), ref_name);
+                let build = models::CreateBuild {
+                    parent: models::LayerSetName::parse(layer_set_name).unwrap(),
+                    source_reference: hash,
                 };
 
-                let tree_name = format!("{}/trees/{}", self.site_source_name.name(), ref_name);
-                let revision = models::CreateTreeRevision {
-                    resource_id: Cow::Owned(hash),
-                    parent: models::TreeName::parse(tree_name).unwrap(),
-                    status,
-                };
-
-                Ok((input, Some(GitPktLineOutput::RefPkt(revision))))
+                Ok((input, Some(GitPktLineOutput::RefPkt(build))))
             }
             PktLine::Data(RefPkt { .. }) => {
                 // Ignore anything that is not a branch.

@@ -200,25 +200,22 @@ impl Sites for SitesService {
 
         let remote_site_source = crate::backends::GenericRemoteSiteSource::new();
 
-        let tree_revisions = tokio::time::timeout(
+        let builds = tokio::time::timeout(
             std::time::Duration::from_secs(60),
             remote_site_source.list_tree_revisions(&site_source),
         )
         .await
         .map_err(|_err| Status::unavailable("timed out waiting for the remote source"))?
         .map_err(|err| {
-            tracing::error!("error when listing tree revisions: {:?}", err);
+            tracing::error!("error when listing remote revisions: {:?}", err);
             Status::unavailable("there was a problem when trying to list remote revisions")
         })?;
 
-        for tree_revision in tree_revisions {
-            self.database
-                .create_tree_revision(&tree_revision)
-                .await
-                .map_err(|err| {
-                    tracing::error!("error: {:?}", err);
-                    Status::internal("error when creating tree revision")
-                })?;
+        for build in builds {
+            self.database.create_build(&build).await.map_err(|err| {
+                tracing::error!("error: {:?}", err);
+                Status::internal("error when creating build")
+            })?;
         }
 
         Ok(Response::new(RefreshSiteSourceResponse {}))

@@ -8,7 +8,7 @@ pub type BuildQueue = Arc<dyn BuildQueueBackend>;
 
 #[async_trait::async_trait]
 pub trait BuildQueueBackend: Debug + Send + Sync {
-    async fn stream(
+    async fn stream_builds(
         &self,
-    ) -> Result<Box<dyn Stream<Item = Result<models::TreeRevision>> + Unpin + Send>>;
+    ) -> Result<Box<dyn Stream<Item = Result<models::Build>> + Unpin + Send>>;
 }

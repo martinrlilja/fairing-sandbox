@@ -527,18 +527,18 @@ impl database::SiteRepository for PostgresDatabase {
 }
 
 #[async_trait::async_trait]
-impl database::TreeRepository for PostgresDatabase {
-    async fn list_trees(
+impl database::LayerRepository for PostgresDatabase {
+    async fn list_layer_sets(
         &self,
         site_source_name: &models::SiteSourceName,
-    ) -> Result<Vec<models::Tree>> {
-        let trees = sqlx::query_as(
+    ) -> Result<Vec<models::LayerSet>> {
+        let layer_sets = sqlx::query_as(
             r"
-            SELECT 'teams/' || t.name || '/sites/' || s.name || '/sources/' || ss.name || '/trees/' || tr.name AS name,
-                    tr.created_time, tr.version
-            FROM trees tr
+            SELECT 'teams/' || t.name || '/sites/' || s.name || '/sources/' || ss.name || '/layersets/' || ls.name AS name,
+                    ls.created_time
+            FROM layer_sets ls
             JOIN site_sources ss
-                ON ss.id = tr.site_source_id
+                ON ss.id = ls.site_source_id
             JOIN sites s
                 ON s.id = ss.site_id
             JOIN teams t
@@ -552,97 +552,94 @@ impl database::TreeRepository for PostgresDatabase {
         .fetch_all(&self.pool)
         .await?;
 
-        Ok(trees)
+        Ok(layer_sets)
     }
 
-    async fn get_tree(&self, tree_name: &models::TreeName) -> Result<Option<models::Tree>> {
-        let tree = sqlx::query_as(
+    async fn get_layer_set(
+        &self,
+        layer_set_name: &models::LayerSetName,
+    ) -> Result<Option<models::LayerSet>> {
+        let layer_set = sqlx::query_as(
             r"
-            SELECT 'teams/' || t.name || '/sites/' || s.name || '/sources/' || ss.name || '/trees/' || tr.name AS name,
-                    tr.created_time, tr.version
-            FROM trees tr
+            SELECT ls.id, 'teams/' || t.name || '/sites/' || s.name || '/sources/' || ss.name || '/layersets/' || ls.name AS name,
+                    ls.created_time
+            FROM layer_sets ls
             JOIN site_sources ss
-                ON ss.id = tr.site_source_id
+                ON ss.id = ls.site_source_id
             JOIN sites s
                 ON s.id = ss.site_id
             JOIN teams t
                 ON t.id = s.team_id
-            WHERE t.name = $1 AND s.name = $2 AND ss.name = $3 AND tr.name = $4;
+            WHERE t.name = $1 AND s.name = $2 AND ss.name = $3 AND ls.name = $4;
             ",
         )
-        .bind(tree_name.parent().parent().parent().resource())
-        .bind(tree_name.parent().parent().resource())
-        .bind(tree_name.parent().resource())
+        .bind(layer_set_name.parent().parent().parent().resource())
+        .bind(layer_set_name.parent().parent().resource())
+        .bind(layer_set_name.parent().resource())
+        .bind(layer_set_name.resource())
         .fetch_optional(&self.pool)
         .await?;
 
-        Ok(tree)
+        Ok(layer_set)
     }
 
-    async fn create_tree_revision(
-        &self,
-        tree_revision: &models::CreateTreeRevision,
-    ) -> Result<Option<models::TreeRevision>> {
+    async fn create_build(&self, build: &models::CreateBuild) -> Result<models::Build> {
         let mut tx = self.pool.begin().await?;
 
-        let tree = models::CreateTree {
-            resource_id: tree_revision.parent.resource(),
-            parent: tree_revision.parent.parent(),
+        let layer_set = models::CreateLayerSet {
+            resource_id: build.parent.resource(),
+            parent: build.parent.parent(),
         };
-        let tree = tree.create().context("creating tree")?;
 
-        let query_result = sqlx::query(
+        let layer_set = layer_set.create().context("creating layer set")?;
+
+        sqlx::query(
             r"
-            INSERT INTO trees (id, created_time, name, site_source_id, version)
-            SELECT $1, $2, $3, ss.id, 1
+            INSERT INTO layer_sets (id, created_time, name, site_source_id)
+            SELECT $1, $2, $3, ss.id
             FROM site_sources ss
             JOIN sites s
                 ON s.id = ss.site_id
             JOIN teams t
                 ON t.id = s.team_id
             WHERE t.name = $4 AND s.name = $5 AND ss.name = $6
-            ON CONFLICT (site_source_id, name) DO UPDATE SET version = trees.version + 1;
+            ON CONFLICT (site_source_id, name) DO NOTHING;
             ",
         )
-        .bind(Uuid::new_v4())
-        .bind(tree.created_time)
-        .bind(tree.name.resource())
-        .bind(tree.name.parent().parent().parent().resource())
-        .bind(tree.name.parent().parent().resource())
-        .bind(tree.name.parent().resource())
+        .bind(layer_set.id)
+        .bind(layer_set.created_time)
+        .bind(layer_set.name.resource())
+        .bind(layer_set.name.parent().parent().parent().resource())
+        .bind(layer_set.name.parent().parent().resource())
+        .bind(layer_set.name.parent().resource())
         .execute(&mut tx)
         .await
-        .context("inserting tree")?;
+        .context("inserting layer set")?;
 
-        ensure!(
-            query_result.rows_affected() == 1,
-            "tree parent not found ({})",
-            tree.name.parent().name(),
-        );
+        let build = build.create().context("creating build")?;
 
-        let tree_revision = tree_revision.create().context("creating tree revision")?;
-
-        let name: Option<String> = sqlx::query_scalar(
+        sqlx::query(
             r"
-            INSERT INTO tree_revisions (tree_id, version, created_time, name, status)
-            SELECT tr.id, tr.version, $1, $2, $3
-            FROM trees tr
+            INSERT INTO builds (id, created_time, name, layer_set_id, layer_id, status, source_reference)
+            SELECT $1, $2, $3, ls.id, $4, $5, $6
+            FROM layer_sets ls
             JOIN site_sources ss
-                ON ss.id = tr.site_source_id
+                ON ss.id = ls.site_source_id
             JOIN sites s
                 ON s.id = ss.site_id
             JOIN teams t
                 ON t.id = s.team_id
-            WHERE t.name = $4 AND s.name = $5 AND ss.name = $6 AND tr.name = $7
-            ON CONFLICT (tree_id, name) DO NOTHING
-            RETURNING name;
+            WHERE t.name = $7 AND s.name = $8 AND ss.name = $9 AND ls.name = $10;
             ",
         )
-        .bind(tree_revision.created_time)
-        .bind(tree_revision.name.resource())
-        .bind(tree_revision.status)
+        .bind(uuid::Uuid::new_v4())
+        .bind(build.created_time)
+        .bind(build.name.resource())
+        .bind(build.layer_id)
+        .bind(build.status)
+        .bind(&build.source_reference)
         .bind(
-            tree_revision
+            build
                 .name
                 .parent()
                 .parent()
@@ -650,20 +647,16 @@ impl database::TreeRepository for PostgresDatabase {
                 .parent()
                 .resource(),
         )
-        .bind(tree_revision.name.parent().parent().parent().resource())
-        .bind(tree_revision.name.parent().parent().resource())
-        .bind(tree_revision.name.parent().resource())
-        .fetch_optional(&mut tx)
+        .bind(build.name.parent().parent().parent().resource())
+        .bind(build.name.parent().parent().resource())
+        .bind(build.name.parent().resource())
+        .execute(&mut tx)
         .await
         .context("inserting tree revision")?;
 
         // TODO: handle version conflicts on commit.
         tx.commit().await?;
 
-        if let Some(_name) = name {
-            Ok(Some(tree_revision))
-        } else {
-            Ok(None)
-        }
+        Ok(build)
     }
 }

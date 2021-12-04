@@ -23,7 +23,7 @@ impl remote_site_source::RemoteSiteSourceRepository for GenericRemoteSiteSource 
     async fn list_tree_revisions(
         &self,
         site_source: &models::SiteSource,
-    ) -> Result<Vec<models::CreateTreeRevision>> {
+    ) -> Result<Vec<models::CreateBuild>> {
         match site_source.kind {
             Some(models::SiteSourceKind::GitSource(ref git_source)) => {
                 let remote_site_source = git::GitRemoteSiteSource;
@@ -35,17 +35,17 @@ impl remote_site_source::RemoteSiteSourceRepository for GenericRemoteSiteSource 
         }
     }
 
-    async fn fetch<'n>(
+    async fn fetch(
         &self,
         site_source: &models::SiteSource,
-        fetch_tree_revision: &models::TreeRevisionName<'n>,
+        build: &models::Build,
         work_directory: PathBuf,
     ) -> Result<PathBuf> {
         match site_source.kind {
             Some(models::SiteSourceKind::GitSource(ref git_source)) => {
                 let remote_site_source = git::GitRemoteSiteSource;
                 remote_site_source
-                    .fetch(site_source, git_source, fetch_tree_revision, work_directory)
+                    .fetch(site_source, git_source, build, work_directory)
                     .await
             }
             None => Err(anyhow!("unknown site source kind")),

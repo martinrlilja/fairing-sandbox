@@ -10,30 +10,30 @@ use crate::backends::PostgresDatabase;
 
 #[async_trait::async_trait]
 impl build_queue::BuildQueueBackend for PostgresDatabase {
-    async fn stream(
+    async fn stream_builds(
         &self,
-    ) -> Result<Box<dyn Stream<Item = Result<models::TreeRevision>> + Unpin + Send>> {
+    ) -> Result<Box<dyn Stream<Item = Result<models::Build>> + Unpin + Send>> {
         let pool = self.pool.clone();
 
         let stream = stream! {
             loop {
                 let mut tx = pool.begin().await?;
 
-                let tree_revision = sqlx::query_as(
+                let build = sqlx::query_as(
                     r"
-                    SELECT tree_id, name
-                    FROM tree_revisions
+                    SELECT layer_set_id, name
+                    FROM builds
                     WHERE status = $1
                     ORDER BY created_time ASC
                     FOR UPDATE SKIP LOCKED;
                     ",
                 )
-                .bind(models::TreeRevisionStatus::Fetch)
+                .bind(models::BuildStatus::Queued)
                 .fetch_optional(&mut tx)
                 .await?;
 
-                let (tree_id, tree_revision_name): (Uuid, String) = match tree_revision {
-                    Some((tree_id, tree_revision_name)) => (tree_id, tree_revision_name),
+                let (layer_set_id, build_name): (Uuid, String) = match build {
+                    Some((layer_set_id, build_name)) => (layer_set_id, build_name),
                     None => {
                         time::sleep(Duration::from_secs(2)).await;
                         continue;
@@ -42,35 +42,35 @@ impl build_queue::BuildQueueBackend for PostgresDatabase {
 
                 sqlx::query(
                     r"
-                    UPDATE tree_revisions
+                    UPDATE builds
                     SET status = $3
-                    WHERE tree_id = $1 AND name = $2;
+                    WHERE layer_set_id = $1 AND name = $2;
                     ",
                 )
-                .bind(tree_id)
-                .bind(&tree_revision_name)
-                .bind(models::TreeRevisionStatus::Build)
+                .bind(layer_set_id)
+                .bind(&build_name)
+                .bind(models::BuildStatus::Building)
                 .execute(&mut tx)
                 .await?;
 
                 let tree_revision = sqlx::query_as(
                     r"
-                    SELECT 'teams/' || t.name || '/sites/' || s.name || '/sources/' || ss.name || '/trees/' || tr.name || '/revisions/' || trr.name AS name,
-                        trr.created_time, trr.status
-                    FROM tree_revisions trr
-                    JOIN trees tr
-                        ON tr.id = trr.tree_id
+                    SELECT 'teams/' || t.name || '/sites/' || s.name || '/sources/' || ss.name || '/layersets/' || ls.name || '/builds/' || b.name AS name,
+                        b.created_time, b.layer_id, b.status, b.source_reference
+                    FROM builds b
+                    JOIN layer_sets ls
+                        ON ls.id = b.layer_set_id
                     JOIN site_sources ss
-                        ON ss.id = tr.site_source_id
+                        ON ss.id = ls.site_source_id
                     JOIN sites s
                         ON s.id = ss.site_id
                     JOIN teams t
                         ON t.id = s.team_id
-                    WHERE trr.tree_id = $1 AND trr.name = $2;
+                    WHERE b.layer_set_id = $1 AND b.name = $2;
                     ",
                 )
-                .bind(tree_id)
-                .bind(&tree_revision_name)
+                .bind(layer_set_id)
+                .bind(&build_name)
                 .fetch_optional(&mut tx)
                 .await?;
 

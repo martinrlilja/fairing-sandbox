@@ -40,7 +40,6 @@ CREATE TABLE site_sources (
     hook_token TEXT NOT NULL,
 
     last_refresh_time TIMESTAMPTZ DEFAULT NULL,
-    --pending_refresh BOOLEAN NOT NULL DEFAULT FALSE,
 
     UNIQUE (site_id, name)
 );
@@ -63,70 +62,49 @@ CREATE TABLE domains (
 
 CREATE UNIQUE INDEX domain_fqdn ON domains (fqdn) WHERE is_validated = TRUE;
 
--- Storage trees
-CREATE TABLE trees (
+-- Storage layers
+CREATE TABLE layer_sets (
     id UUID PRIMARY KEY,
     created_time TIMESTAMPTZ NOT NULL,
     name TEXT NOT NULL,
 
     site_source_id UUID REFERENCES site_sources (id) ON DELETE SET NULL,
 
-    version BIGINT NOT NULL,
-
     UNIQUE (site_source_id, name)
 );
 
-CREATE TYPE tree_revision_status AS ENUM (
-    'ignore',
-    'fetch',
-    'build',
-    'draft',
+-- Builds
+CREATE TYPE build_status AS ENUM (
+    'queued',
+    'building',
     'complete'
 );
 
-CREATE TABLE tree_revisions (
-    tree_id UUID REFERENCES trees (id) ON DELETE CASCADE NOT NULL,
-    version BIGINT NOT NULL,
-    created_time TIMESTAMPTZ NOT NULL,
-
-    name TEXT NOT NULL,
-    status tree_revision_status NOT NULL,
-
-    PRIMARY KEY (tree_id, version),
-    UNIQUE (tree_id, name)
-);
-
--- Build
 CREATE TABLE builds (
     id UUID PRIMARY KEY,
     created_time TIMESTAMPTZ NOT NULL,
     name TEXT NOT NULL,
 
-    tree_id UUID REFERENCES trees (id) ON DELETE CASCADE NOT NULL,
+    layer_set_id UUID REFERENCES layer_sets (id) ON DELETE SET NULL,
+    layer_id UUID NOT NULL,
 
-    log_output TEXT NOT NULL
+    status build_status NOT NULL,
+
+    source_reference TEXT NOT NULL
 );
 
 -- Deployments
 CREATE TABLE deployments (
     id UUID PRIMARY KEY,
     created_time TIMESTAMPTZ NOT NULL,
-    name TEXT UNIQUE NOT NULL,
+    name TEXT NOT NULL,
 
     site_id UUID REFERENCES sites (id) ON DELETE CASCADE NOT NULL,
 
-    status TEXT NOT NULL,
-    reference TEXT NOT NULL,
-
     config JSONB,
 
-    tree_id UUID REFERENCES trees (id) ON DELETE SET NULL,
-    tree_version BIGINT NOT NULL,
-
-    commit_id TEXT,
-    commit_message TEXT,
-    commit_author_name TEXT,
-    commit_author_email TEXT,
+    layer_set_id UUID REFERENCES layer_sets (id) ON DELETE SET NULL,
+    layer_id UUID NOT NULL,
 
     UNIQUE (site_id, name)
 );
@@ -172,15 +150,14 @@ CREATE TABLE file_chunks (
     FOREIGN KEY (file_keyspace, file_checksum) REFERENCES files (file_keyspace, checksum) ON DELETE CASCADE
 );
 
-CREATE TABLE tree_leaves (
-    tree_id UUID NOT NULL,
-    version BIGINT NOT NULL,
+CREATE TABLE layer_members (
+    layer_set_id UUID NOT NULL,
+    layer_id UUID NOT NULL,
     path TEXT NOT NULL,
 
     file_keyspace UUID,
     file_checksum BYTEA,
 
-    PRIMARY KEY (tree_id, path, version),
-    FOREIGN KEY (tree_id, version) REFERENCES tree_revisions (tree_id, version) ON DELETE CASCADE,
+    PRIMARY KEY (layer_set_id, path, layer_id),
     FOREIGN KEY (file_keyspace, file_checksum) REFERENCES files (file_keyspace, checksum) ON DELETE CASCADE
 );

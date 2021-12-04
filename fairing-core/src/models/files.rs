@@ -102,9 +102,9 @@ pub struct CreateFileChunk {
     pub blob_checksum: BlobChecksum,
 }
 
-pub struct CreateTreeLeaf {
-    pub tree_id: models::TreeId,
-    pub version: i64,
+pub struct CreateLayerMember {
+    pub layer_set_id: models::LayerSetId,
+    pub layer_id: models::LayerId,
     pub path: String,
     pub file_id: Option<FileId>,
 }

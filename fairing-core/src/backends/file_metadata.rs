@@ -33,5 +33,5 @@ pub trait FileMetadataRepository: Send + Sync {
 
     async fn create_file_chunk(&self, file_chunk: &models::CreateFileChunk) -> Result<()>;
 
-    async fn create_tree_leaf(&self, tree_leaf: &models::CreateTreeLeaf) -> Result<()>;
+    async fn create_layer_member(&self, layer_member: &models::CreateLayerMember) -> Result<()>;
 }

@@ -6,12 +6,12 @@ use crate::models;
 pub type Database = Arc<dyn DatabaseBackend>;
 
 pub trait DatabaseBackend:
-    Debug + UserRepository + TeamRepository + SiteRepository + TreeRepository
+    Debug + UserRepository + TeamRepository + SiteRepository + LayerRepository
 {
 }
 
 impl<T> DatabaseBackend for T where
-    T: Debug + UserRepository + TeamRepository + SiteRepository + TreeRepository
+    T: Debug + UserRepository + TeamRepository + SiteRepository + LayerRepository
 {
 }
 
@@ -78,16 +78,16 @@ pub trait SiteRepository: Send + Sync {
 }
 
 #[async_trait::async_trait]
-pub trait TreeRepository: Send + Sync {
-    async fn list_trees(
+pub trait LayerRepository: Send + Sync {
+    async fn list_layer_sets(
         &self,
         site_source_name: &models::SiteSourceName,
-    ) -> Result<Vec<models::Tree>>;
+    ) -> Result<Vec<models::LayerSet>>;
 
-    async fn get_tree(&self, tree_name: &models::TreeName) -> Result<Option<models::Tree>>;
-
-    async fn create_tree_revision(
+    async fn get_layer_set(
         &self,
-        tree_revision: &models::CreateTreeRevision,
-    ) -> Result<Option<models::TreeRevision>>;
+        layer_set_name: &models::LayerSetName,
+    ) -> Result<Option<models::LayerSet>>;
+
+    async fn create_build(&self, build: &models::CreateBuild) -> Result<models::Build>;
 }

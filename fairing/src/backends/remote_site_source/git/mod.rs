@@ -30,7 +30,7 @@ impl GitRemoteSiteSource {
         &self,
         site_source: &models::SiteSource,
         git_source: &models::GitSource,
-    ) -> Result<Vec<models::CreateTreeRevision<'static>>> {
+    ) -> Result<Vec<models::CreateBuild>> {
         let repository = git_source.repository_url.parts()?;
         let command = format!("git-upload-pack '{}'", repository.path);
 
@@ -71,7 +71,7 @@ impl GitRemoteSiteSource {
         &self,
         site_source: &models::SiteSource,
         git_source: &models::GitSource,
-        fetch_tree_revision: &models::TreeRevisionName<'n>,
+        build: &models::Build,
         work_directory: PathBuf,
     ) -> Result<PathBuf> {
         let repository = git_source.repository_url.parts()?;
@@ -87,14 +87,14 @@ impl GitRemoteSiteSource {
         let mut client = SshClient::connect(config).await?;
         let mut reader = GitPktLineReader::new(&site_source.name);
 
-        let tree_name = fetch_tree_revision.parent();
+        let layer_set_name = build.name.parent();
         let mut found_hash: Option<String> = None;
 
         while let Some(output) = client.read(&mut reader).await? {
             match output {
                 Some(GitPktLineOutput::RefPkt(tree_revision)) => {
-                    if tree_revision.parent.resource() == tree_name.resource() {
-                        found_hash = Some(tree_revision.resource_id.into());
+                    if tree_revision.parent.resource() == layer_set_name.resource() {
+                        found_hash = Some(build.source_reference.clone());
                     }
                 }
                 Some(GitPktLineOutput::Flush) => {
@@ -104,7 +104,7 @@ impl GitRemoteSiteSource {
                         // Request the commit we want if it was part of the ref pkts above,
                         // otherwise request the closest commit.
                         // TODO: look for allowReachableSHA1InWant or allowAnySHA1InWant in capabilities.
-                        let line = if found_hash == fetch_tree_revision.resource() {
+                        let line = if found_hash == build.source_reference {
                             format!("want {} deepen 1\n", found_hash)
                         } else {
                             format!("want {}\n", found_hash)
@@ -135,7 +135,7 @@ impl GitRemoteSiteSource {
 
         let commit_key = {
             let mut key = [0u8; 20];
-            hex::decode_to_slice(fetch_tree_revision.resource(), &mut key)?;
+            hex::decode_to_slice(&build.source_reference, &mut key)?;
             key
         };
 

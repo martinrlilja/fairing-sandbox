@@ -1,5 +1,5 @@
 use anyhow::Result;
-use std::{path::PathBuf, sync::Arc, io::ErrorKind};
+use std::{io::ErrorKind, path::PathBuf, sync::Arc};
 use tokio::fs;
 
 use fairing_core::{backends::file_storage, models};

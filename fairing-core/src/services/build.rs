@@ -8,7 +8,7 @@ use tokio::{fs, task};
 
 use crate::{
     backends::{BuildQueue, Database, FileMetadata, RemoteSiteSource},
-    models::{prelude::*, TreeRevision},
+    models::{self, prelude::*},
     services::Storage,
 };
 
@@ -60,17 +60,17 @@ pub struct BuildService {
 
 impl BuildService {
     pub async fn run(mut self) -> Result<()> {
-        let stream = self.build_queue.stream().await?;
+        let stream = self.build_queue.stream_builds().await?;
         pin_mut!(stream);
 
-        while let Some(tree_revision) = stream.next().await {
-            let tree_revision = tree_revision?;
+        while let Some(build) = stream.next().await {
+            let build = build?;
             let build_task = BuildTask {
                 database: self.database.clone(),
                 file_metadata: self.file_metadata.clone(),
                 remote_site_source: self.remote_site_source.clone(),
                 storage: self.storage.clone(),
-                tree_revision,
+                build,
             };
 
             let build_task = tokio::task::spawn(async move {
@@ -98,12 +98,19 @@ struct BuildTask {
     file_metadata: FileMetadata,
     remote_site_source: RemoteSiteSource,
     storage: Storage,
-    tree_revision: TreeRevision,
+    build: models::Build,
 }
 
 impl BuildTask {
     async fn run(self) -> Result<()> {
-        let site_source_name = self.tree_revision.name.parent().parent();
+        let layer_set_name = self.build.name.parent();
+        let layer_set = self
+            .database
+            .get_layer_set(&layer_set_name)
+            .await?
+            .ok_or_else(|| anyhow!("layer set not found"))?;
+
+        let site_source_name = self.build.name.parent().parent();
         let site_source = self
             .database
             .get_site_source(&site_source_name)
@@ -118,7 +125,7 @@ impl BuildTask {
 
         let source_directory = self
             .remote_site_source
-            .fetch(&site_source, &self.tree_revision.name, work_directory)
+            .fetch(&site_source, &self.build, work_directory)
             .await?;
 
         let source_directory = fs::canonicalize(source_directory).await?;
@@ -157,7 +164,7 @@ impl BuildTask {
             "build publish directory cannot be outside of source directory"
         );
 
-        let mut directories = vec![publish_directory];
+        let mut directories = vec![publish_directory.clone()];
 
         while let Some(directory) = directories.pop() {
             let mut read_dir = fs::read_dir(directory).await.context("read directory")?;
@@ -177,10 +184,34 @@ impl BuildTask {
 
                     let stream = tokio_util::io::ReaderStream::new(file);
 
-                    self.storage
+                    let file_id = self
+                        .storage
                         .store_file(&file_keyspace, entry_metadata.len() as i64, stream)
                         .await
                         .context("store file")?;
+
+                    let file_path = entry.path();
+                    let file_relative_path = file_path.strip_prefix(&publish_directory)?;
+                    let path = file_relative_path.components().fold(
+                        String::new(),
+                        |mut path, component| {
+                            let component = component.as_os_str().to_string_lossy();
+                            path.push('/');
+                            path.push_str(&component);
+                            path
+                        },
+                    );
+
+                    let layer_member = models::CreateLayerMember {
+                        layer_set_id: layer_set.id,
+                        layer_id: self.build.layer_id,
+                        path,
+                        file_id: Some(file_id),
+                    };
+
+                    self.file_metadata
+                        .create_layer_member(&layer_member)
+                        .await?;
                 }
             }
         }
