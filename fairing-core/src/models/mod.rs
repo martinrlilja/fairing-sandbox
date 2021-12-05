@@ -1,6 +1,7 @@
 //! Domain models
 
 pub use builds::*;
+pub use deployments::*;
 pub use files::*;
 pub use layers::*;
 pub use sites::*;
@@ -9,6 +10,7 @@ pub use teams::*;
 pub use users::*;
 
 mod builds;
+mod deployments;
 mod files;
 mod layers;
 pub mod prelude;

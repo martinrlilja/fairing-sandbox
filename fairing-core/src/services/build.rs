@@ -216,6 +216,25 @@ impl BuildTask {
             }
         }
 
+        let sites = self
+            .database
+            .list_sites_with_base_source(&source_name)
+            .await?;
+
+        for site in sites {
+            let deployment = models::CreateDeployment {
+                parent: site.name.clone(),
+                projections: vec![models::CreateDeploymentProjection {
+                    layer_set: layer_set_name.clone(),
+                    layer_id: self.build.layer_id,
+                    mount_path: "",
+                    sub_path: "",
+                }],
+            };
+
+            self.database.create_deployment(&deployment).await?;
+        }
+
         Ok(())
     }
 }

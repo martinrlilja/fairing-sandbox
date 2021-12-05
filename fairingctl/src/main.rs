@@ -1,4 +1,4 @@
-use anyhow::{Result, anyhow};
+use anyhow::{anyhow, Result};
 use clap::{crate_version, App, AppSettings, Arg, ArgMatches, SubCommand};
 use tonic::{
     metadata::{AsciiMetadataValue, MetadataValue},
@@ -275,7 +275,9 @@ async fn command_sites(matches: &ArgMatches<'_>) -> Result<()> {
 
             response.get_ref().name.clone()
         } else {
-            return Err(anyhow!("A base source must be set, use --source or --git, for help use --help."));
+            return Err(anyhow!(
+                "A base source must be set, use --source or --git, for help use --help."
+            ));
         };
 
         let response = sites_client
@@ -311,10 +313,7 @@ async fn command_sites(matches: &ArgMatches<'_>) -> Result<()> {
 }
 
 async fn command_sources(matches: &ArgMatches<'_>) -> Result<()> {
-    use fairing_proto::sources::v1beta1::{
-        sources_client::SourcesClient,
-        RefreshSourceRequest,
-    };
+    use fairing_proto::sources::v1beta1::{sources_client::SourcesClient, RefreshSourceRequest};
 
     let channel = Channel::from_static("http://[::1]:8000").connect().await?;
     let auth = ConfigAuth::read().await?;
@@ -322,9 +321,7 @@ async fn command_sources(matches: &ArgMatches<'_>) -> Result<()> {
     let mut sources_client = SourcesClient::with_interceptor(channel, auth);
 
     if let Some(matches) = matches.subcommand_matches("refresh") {
-        let name = matches
-            .value_of("source")
-            .expect("source name must be set");
+        let name = matches.value_of("source").expect("source name must be set");
 
         let _response = sources_client
             .refresh_source(RefreshSourceRequest { name: name.into() })

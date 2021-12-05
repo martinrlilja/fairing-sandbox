@@ -6,7 +6,13 @@ use crate::models;
 pub type Database = Arc<dyn DatabaseBackend>;
 
 pub trait DatabaseBackend:
-    Debug + UserRepository + TeamRepository + SiteRepository + SourceRepository + LayerRepository
+    Debug
+    + UserRepository
+    + TeamRepository
+    + SourceRepository
+    + SiteRepository
+    + DeploymentRepository
+    + LayerRepository
 {
 }
 
@@ -14,8 +20,9 @@ impl<T> DatabaseBackend for T where
     T: Debug
         + UserRepository
         + TeamRepository
-        + SiteRepository
         + SourceRepository
+        + SiteRepository
+        + DeploymentRepository
         + LayerRepository
 {
 }
@@ -69,11 +76,29 @@ pub trait SourceRepository: Send + Sync {
 pub trait SiteRepository: Send + Sync {
     async fn list_sites(&self, team_name: &models::TeamName) -> Result<Vec<models::Site>>;
 
+    async fn list_sites_with_base_source(
+        &self,
+        source_name: &models::SourceName,
+    ) -> Result<Vec<models::Site>>;
+
     async fn get_site(&self, site_name: &models::SiteName) -> Result<Option<models::Site>>;
 
     async fn create_site(&self, site: &models::CreateSite) -> Result<models::Site>;
 
     async fn delete_site(&self, site_name: &models::SiteName) -> Result<()>;
+}
+
+#[async_trait::async_trait]
+pub trait DeploymentRepository: Send + Sync {
+    async fn get_deployment(
+        &self,
+        deployment_name: &models::DeploymentName,
+    ) -> Result<Option<models::Deployment>>;
+
+    async fn create_deployment(
+        &self,
+        deployment: &models::CreateDeployment,
+    ) -> Result<models::Deployment>;
 }
 
 #[async_trait::async_trait]

@@ -186,7 +186,7 @@ impl ResourceIDValidator for DomainLabelValidator {
     fn validate(resource_id: &'_ str) -> Option<&'_ str> {
         lazy_static::lazy_static! {
             static ref RE: regex::Regex = regex::Regex::new(
-                r"^[a-z][a-z0-9]*(-[a-z0-9]+)*$"
+                r"^[a-z0-9]*(-[a-z0-9]+)*$"
             ).unwrap();
         }
 
@@ -266,7 +266,7 @@ mod tests {
         assert!(DomainLabelValidator::validate("test-abc").is_some());
         assert!(DomainLabelValidator::validate("test-abc-def").is_some());
 
-        assert!(DomainLabelValidator::validate("123").is_none());
+        assert!(DomainLabelValidator::validate("123").is_some());
         assert!(DomainLabelValidator::validate("a123").is_some());
 
         assert!(DomainLabelValidator::validate("-test").is_none());

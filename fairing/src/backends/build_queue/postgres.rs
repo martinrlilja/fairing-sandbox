@@ -1,4 +1,4 @@
-use anyhow::{Result, Context as _};
+use anyhow::{Context as _, Result};
 use async_stream::stream;
 use fairing_core::{backends::build_queue, models};
 use futures::Stream;

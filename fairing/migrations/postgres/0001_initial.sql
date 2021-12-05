@@ -102,15 +102,22 @@ CREATE TABLE deployments (
 
     site_id UUID REFERENCES sites (id) ON DELETE CASCADE NOT NULL,
 
-    config JSONB,
-
-    layer_set_id UUID REFERENCES layer_sets (id) ON DELETE SET NULL,
-    layer_id UUID NOT NULL,
-
     UNIQUE (site_id, name)
 );
 
 ALTER TABLE sites ADD current_deployment_id UUID REFERENCES deployments (id) ON DELETE SET NULL;
+
+-- Projections
+CREATE TABLE deployment_projections (
+    id UUID PRIMARY KEY,
+
+    deployment_id UUID REFERENCES deployments (id) ON DELETE CASCADE NOT NULL,
+    layer_set_id UUID REFERENCES layer_sets (id) ON DELETE CASCADE NOT NULL,
+    layer_id UUID NOT NULL,
+
+    mount_path TEXT NOT NULL,
+    sub_path TEXT NOT NULL
+);
 
 -- File storage
 CREATE TABLE file_keyspace (

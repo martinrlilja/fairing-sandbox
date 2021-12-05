@@ -66,8 +66,7 @@ impl<'n> SshReader for GitPktLineReader<'n> {
                     _ => return Ok((input, None)),
                 }
 
-                let layer_set_name =
-                    format!("{}/layersets/{}", self.source_name.name(), ref_name);
+                let layer_set_name = format!("{}/layersets/{}", self.source_name.name(), ref_name);
                 let build = models::CreateBuild {
                     parent: models::LayerSetName::parse(layer_set_name).unwrap(),
                     source_reference: hash,

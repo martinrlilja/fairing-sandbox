@@ -367,10 +367,10 @@ impl database::SiteRepository for PostgresDatabase {
             SELECT 'teams/' || t.name || '/sites/' || s.name AS name, s.created_time,
                     'teams/' || t.name || '/source/' || src.name AS base_source
             FROM sites s
-            JOIN source src
-                ON t.id = src.team_id AND src.id = s.base_source_id
             JOIN teams t
                 ON t.id = s.team_id
+            JOIN sources src
+                ON src.team_id = t.id AND src.id = s.base_source_id
             WHERE t.name = $1;
             ",
         )
@@ -382,16 +382,41 @@ impl database::SiteRepository for PostgresDatabase {
         Ok(sites)
     }
 
+    async fn list_sites_with_base_source(
+        &self,
+        source_name: &models::SourceName,
+    ) -> Result<Vec<models::Site>> {
+        let sites = sqlx::query_as(
+            r"
+            SELECT 'teams/' || t.name || '/sites/' || s.name AS name, s.created_time,
+                    'teams/' || t.name || '/source/' || src.name AS base_source
+            FROM sites s
+            JOIN teams t
+                ON t.id = s.team_id
+            JOIN sources src
+                ON src.team_id = t.id AND src.id = s.base_source_id
+            WHERE t.name = $1 AND src.name = $2;
+            ",
+        )
+        .bind(source_name.parent().resource())
+        .bind(source_name.resource())
+        .fetch_all(&self.pool)
+        .await
+        .context("list sites with base source")?;
+
+        Ok(sites)
+    }
+
     async fn get_site(&self, site_name: &models::SiteName) -> Result<Option<models::Site>> {
         let site = sqlx::query_as(
             r"
-            SELECT 'teams/' || t.name || '/sites/' || s.name AS name, s.created_time
+            SELECT 'teams/' || t.name || '/sites/' || s.name AS name, s.created_time,
                     'teams/' || t.name || '/source/' || src.name AS base_source
             FROM sites s
-            JOIN source src
-                ON t.id = src.team_id AND src.id = s.base_source_id
             JOIN teams t
                 ON t.id = s.team_id
+            JOIN sources src
+                ON src.team_id = t.id AND src.id = s.base_source_id
             WHERE t.name = $1 AND s.name = $2;
             ",
         )
@@ -427,7 +452,10 @@ impl database::SiteRepository for PostgresDatabase {
         .await
         .context("create site")?;
 
-        ensure!(query_result.rows_affected() == 1, "site parent or base source not found");
+        ensure!(
+            query_result.rows_affected() == 1,
+            "site parent or base source not found"
+        );
 
         Ok(site)
     }
@@ -532,6 +560,88 @@ impl database::SourceRepository for PostgresDatabase {
         tx.commit().await.context("create source (commit)")?;
 
         Ok(source)
+    }
+}
+
+#[async_trait::async_trait]
+impl database::DeploymentRepository for PostgresDatabase {
+    async fn get_deployment(
+        &self,
+        _deployment_name: &models::DeploymentName,
+    ) -> Result<Option<models::Deployment>> {
+        todo!();
+    }
+
+    async fn create_deployment(
+        &self,
+        deployment: &models::CreateDeployment,
+    ) -> Result<models::Deployment> {
+        let deployment = deployment.create()?;
+        let deployment_id = Uuid::new_v4();
+
+        let mut tx = self.pool.begin().await?;
+
+        let query_result = sqlx::query(
+            r"
+            INSERT INTO deployments (id, created_time, name, site_id)
+            SELECT $1, $2, $3, s.id
+            FROM sites s
+            JOIN teams t
+                ON t.id = s.team_id
+            WHERE t.name = $4 AND s.name = $5;
+            ",
+        )
+        .bind(&deployment_id)
+        .bind(&deployment.created_time)
+        .bind(deployment.name.resource())
+        .bind(deployment.name.parent().parent().resource())
+        .bind(deployment.name.parent().resource())
+        .execute(&mut tx)
+        .await
+        .context("create deployment")?;
+
+        ensure!(
+            query_result.rows_affected() == 1,
+            "deployment parent not found: {}",
+            deployment.name.name(),
+        );
+
+        for projection in deployment.projections.iter() {
+            let projection_id = Uuid::new_v4();
+            let query_result = sqlx::query(
+                r"
+                INSERT INTO deployment_projections (id, deployment_id, layer_set_id, layer_id, mount_path, sub_path)
+                SELECT $1, $2, ls.id, $3, $4, $5
+                FROM layer_sets ls
+                JOIN sources src
+                    ON src.id = ls.source_id
+                JOIN teams t
+                    ON t.id = src.team_id
+                WHERE t.name = $6 AND src.name = $7 AND ls.name = $8;
+                ",
+            )
+            .bind(&projection_id)
+            .bind(&deployment_id)
+            .bind(&projection.layer_id)
+            .bind(&projection.mount_path)
+            .bind(&projection.sub_path)
+            .bind(projection.layer_set.parent().parent().resource())
+            .bind(projection.layer_set.parent().resource())
+            .bind(projection.layer_set.resource())
+            .execute(&mut tx)
+            .await
+            .context("create deployment (projection)")?;
+
+            ensure!(
+                query_result.rows_affected() == 1,
+                "deployment projection layer set not found: {}",
+                projection.layer_set.name(),
+            );
+        }
+
+        tx.commit().await.context("create deployment (commit)")?;
+
+        Ok(deployment)
     }
 }
 
