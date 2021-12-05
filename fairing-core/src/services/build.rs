@@ -119,13 +119,20 @@ impl BuildTask {
 
         tracing::trace!("running build");
 
-        let work_directory: PathBuf = ".build".into();
+        let work_directory = {
+            let mut work_directory = PathBuf::new();
+            work_directory.push(".build");
+            fs::create_dir_all(&work_directory).await?;
+
+            work_directory.push(self.build.name.resource());
+            work_directory
+        };
 
         fs::create_dir(&work_directory).await?;
 
         let source_directory = self
             .remote_source
-            .fetch(&source, &self.build, work_directory)
+            .fetch(&source, &self.build, work_directory.clone())
             .await?;
 
         let source_directory = fs::canonicalize(source_directory).await?;
@@ -216,6 +223,11 @@ impl BuildTask {
             }
         }
 
+        tracing::trace!("cleaning work directory: {:?}", work_directory);
+        fs::remove_dir_all(work_directory).await?;
+
+        tracing::trace!("creating deployments");
+
         let sites = self
             .database
             .list_sites_with_base_source(&source_name)
@@ -234,6 +246,8 @@ impl BuildTask {
 
             self.database.create_deployment(&deployment).await?;
         }
+
+        tracing::trace!("build complete");
 
         Ok(())
     }

@@ -84,7 +84,7 @@ CREATE TYPE build_status AS ENUM (
 CREATE TABLE builds (
     id UUID PRIMARY KEY,
     created_time TIMESTAMPTZ NOT NULL,
-    name TEXT NOT NULL,
+    name TEXT NOT NULL UNIQUE,
 
     layer_set_id UUID REFERENCES layer_sets (id) ON DELETE SET NULL,
     layer_id UUID NOT NULL,
