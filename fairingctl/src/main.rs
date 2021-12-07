@@ -108,9 +108,10 @@ async fn command_users(matches: &ArgMatches<'_>) -> Result<()> {
     let stdin = stdin();
     let mut stdin = stdin.lock();
 
-    let mut users_client =
-        fairing_proto::users::v1beta1::users_client::UsersClient::connect("http://[::1]:8000")
-            .await?;
+    let mut users_client = fairing_proto::users::v1beta1::users_client::UsersClient::connect(
+        "http://api.localhost:8000",
+    )
+    .await?;
 
     if let Some(_matches) = matches.subcommand_matches("create") {
         stdout.write_all(b"Username: ")?;
@@ -192,7 +193,9 @@ async fn command_teams(matches: &ArgMatches<'_>) -> Result<()> {
         teams_client::TeamsClient, CreateTeamRequest, ListTeamsRequest,
     };
 
-    let channel = Channel::from_static("http://[::1]:8000").connect().await?;
+    let channel = Channel::from_static("http://api.localhost:8000")
+        .connect()
+        .await?;
     let auth = ConfigAuth::read().await?;
 
     let mut teams_client = TeamsClient::with_interceptor(channel, auth);
@@ -234,7 +237,9 @@ async fn command_sites(matches: &ArgMatches<'_>) -> Result<()> {
         source, sources_client::SourcesClient, CreateSourceRequest, Source,
     };
 
-    let channel = Channel::from_static("http://[::1]:8000").connect().await?;
+    let channel = Channel::from_static("http://api.localhost:8000")
+        .connect()
+        .await?;
     let auth = ConfigAuth::read().await?;
 
     let mut sites_client = SitesClient::with_interceptor(channel.clone(), auth.clone());
@@ -315,7 +320,9 @@ async fn command_sites(matches: &ArgMatches<'_>) -> Result<()> {
 async fn command_sources(matches: &ArgMatches<'_>) -> Result<()> {
     use fairing_proto::sources::v1beta1::{sources_client::SourcesClient, RefreshSourceRequest};
 
-    let channel = Channel::from_static("http://[::1]:8000").connect().await?;
+    let channel = Channel::from_static("http://api.localhost:8000")
+        .connect()
+        .await?;
     let auth = ConfigAuth::read().await?;
 
     let mut sources_client = SourcesClient::with_interceptor(channel, auth);

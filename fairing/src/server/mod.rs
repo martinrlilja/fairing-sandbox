@@ -1,3 +1,4 @@
+use anyhow::{anyhow, Error, Result};
 use fairing_core::{
     backends::{Database, FileMetadata},
     models::{self, prelude::*},
@@ -6,22 +7,27 @@ use fairing_proto::{
     sites::v1beta1::sites_server::SitesServer, sources::v1beta1::sources_server::SourcesServer,
     teams::v1beta1::teams_server::TeamsServer, users::v1beta1::users_server::UsersServer,
 };
-use std::net::SocketAddr;
-use tonic::{
-    transport::{Error, Server},
-    Request, Status,
+use futures::future::{self, Either, TryFutureExt};
+use hyper::{server::conn::AddrStream, service::make_service_fn, Server};
+use std::{
+    convert::Infallible,
+    net::SocketAddr,
+    pin::Pin,
+    task::{Context, Poll},
 };
+use tonic::{transport::Server as TonicServer, Request, Status};
+use tower::Service;
 
 mod sites;
 mod sources;
 mod teams;
 mod users;
 
-pub async fn api_server(
+pub async fn serve(
     database: Database,
     file_metadata: FileMetadata,
     addr: SocketAddr,
-) -> Result<(), Error> {
+) -> Result<()> {
     let web_config = tonic_web::config();
     let auth = AuthInterceptor::new(&database);
 
@@ -40,14 +46,61 @@ pub async fn api_server(
         auth.interceptor(),
     );
 
-    Server::builder()
+    let tonic = TonicServer::builder()
         .accept_http1(true)
         .add_service(web_config.enable(users_server))
         .add_service(web_config.enable(teams_server))
         .add_service(web_config.enable(sites_server))
         .add_service(web_config.enable(sources_server))
-        .serve(addr)
-        .await
+        .into_service();
+
+    Server::bind(&addr)
+        .serve(make_service_fn(move |s: &AddrStream| {
+            let remote_addr = s.remote_addr();
+
+            let mut tonic = tonic.clone();
+
+            future::ok::<_, Infallible>(tower::service_fn(
+                move |req: hyper::Request<hyper::Body>| {
+                    let host = req.uri().host().or_else(|| {
+                        req.headers()
+                            .get(http::header::HOST)
+                            .and_then(|host| host.to_str().ok())
+                            .and_then(|host| host.split(':').next())
+                    });
+
+                    let path = req.uri().path_and_query().map(|p| p.as_str());
+
+                    tracing::info!(
+                        remote_addr = %remote_addr,
+                        version = ?req.version(),
+                        method = %req.method(),
+                        path = %path.unwrap_or("None"),
+                        host = %host.unwrap_or("None"),
+                    );
+
+                    match host {
+                        Some(host) if host == "api.localhost" => Either::Left(
+                            tonic
+                                .call(req)
+                                .map_ok(|res| res.map(EitherBody::Left))
+                                .map_err(|err| anyhow!("tonic error: {:?}", err)),
+                        ),
+                        _host => Either::Right(async {
+                            let res: Result<http::Response<_>> = hyper::Response::builder()
+                                .status(http::status::StatusCode::OK)
+                                .header(http::header::CONTENT_TYPE, "text/plain")
+                                .body(EitherBody::Right(hyper::Body::from("200 ok")))
+                                .map_err(|err| err.into());
+                            res
+                        }),
+                    }
+                },
+            ))
+        }))
+        .await?;
+
+    Ok(())
 }
 
 async fn auth<T>(
@@ -122,4 +175,52 @@ impl AuthInterceptor {
 
         move |req: Request<()>| -> Result<Request<()>, Status> { Ok(req) }
     }
+}
+
+enum EitherBody<A, B> {
+    Left(A),
+    Right(B),
+}
+
+// From: https://github.com/hyperium/tonic/blob/master/examples/src/hyper_warp_multiplex/server.rs
+impl<A, B> http_body::Body for EitherBody<A, B>
+where
+    A: http_body::Body + Send + Unpin,
+    B: http_body::Body<Data = A::Data> + Send + Unpin,
+    A::Error: Into<Error>,
+    B::Error: Into<Error>,
+{
+    type Data = A::Data;
+    type Error = anyhow::Error;
+
+    fn is_end_stream(&self) -> bool {
+        match self {
+            EitherBody::Left(b) => b.is_end_stream(),
+            EitherBody::Right(b) => b.is_end_stream(),
+        }
+    }
+
+    fn poll_data(
+        self: Pin<&mut Self>,
+        cx: &mut Context<'_>,
+    ) -> Poll<Option<Result<Self::Data, Self::Error>>> {
+        match self.get_mut() {
+            EitherBody::Left(b) => Pin::new(b).poll_data(cx).map(map_option_err),
+            EitherBody::Right(b) => Pin::new(b).poll_data(cx).map(map_option_err),
+        }
+    }
+
+    fn poll_trailers(
+        self: Pin<&mut Self>,
+        cx: &mut Context<'_>,
+    ) -> Poll<Result<Option<http::HeaderMap>, Self::Error>> {
+        match self.get_mut() {
+            EitherBody::Left(b) => Pin::new(b).poll_trailers(cx).map_err(Into::into),
+            EitherBody::Right(b) => Pin::new(b).poll_trailers(cx).map_err(Into::into),
+        }
+    }
+}
+
+fn map_option_err<T, U: Into<Error>>(err: Option<Result<T, U>>) -> Option<Result<T, Error>> {
+    err.map(|e| e.map_err(Into::into))
 }

@@ -54,7 +54,7 @@ async fn main() -> Result<()> {
 
         tracing::info!("server listening on {}", addr);
 
-        server::api_server(database.database(), database.file_metadata(), addr).await?;
+        server::serve(database.database(), database.file_metadata(), addr).await?;
     }
 
     Ok(())
