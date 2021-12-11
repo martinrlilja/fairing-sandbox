@@ -185,4 +185,50 @@ impl file_metadata::FileMetadataRepository for PostgresDatabase {
 
         Ok(())
     }
+
+    async fn get_layer_member_file(
+        &self,
+        layer_set_id: models::LayerSetId,
+        layer_id: models::LayerId,
+        path: &str,
+    ) -> Result<Option<models::File>> {
+        let file: Option<(models::FileKeyspaceId, Vec<u8>, i64, bool)> = sqlx::query_as(
+            r"
+            SELECT f.file_keyspace, f.checksum, f.size, f.is_valid_utf8
+            FROM files f
+            JOIN layer_members lm ON lm.file_keyspace = f.file_keyspace AND lm.file_checksum = f.checksum
+            WHERE lm.layer_set_id = $1 AND lm.layer_id = $2 AND lm.path = $3;
+            "
+        )
+        .bind(layer_set_id)
+        .bind(layer_id)
+        .bind(path)
+        .fetch_optional(&self.pool)
+        .await?;
+
+        match file {
+            Some((file_keyspace, file_id, size, is_valid_utf8)) => Ok(Some(models::File {
+                id: models::FileId(file_keyspace, file_id),
+                size,
+                is_valid_utf8,
+            })),
+            None => Ok(None),
+        }
+    }
+
+    async fn get_file_chunks(&self, file_id: &models::FileId) -> Result<Vec<Vec<u8>>> {
+        let blob_checksums = sqlx::query_scalar(
+            r"
+            SELECT fc.blob_checksum
+            FROM file_chunks fc
+            WHERE fc.file_keyspace = $1 AND fc.file_checksum = $2;
+            ",
+        )
+        .bind(file_id.0)
+        .bind(&file_id.1)
+        .fetch_all(&self.pool)
+        .await?;
+
+        Ok(blob_checksums)
+    }
 }

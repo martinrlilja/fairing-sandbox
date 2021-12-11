@@ -1,6 +1,6 @@
 use anyhow::{anyhow, Error, Result};
 use fairing_core::{
-    backends::{Database, FileMetadata},
+    backends::{Database, FileMetadata, FileStorage},
     models::{self, prelude::*},
 };
 use fairing_proto::{
@@ -22,10 +22,12 @@ mod sites;
 mod sources;
 mod teams;
 mod users;
+mod web;
 
 pub async fn serve(
     database: Database,
     file_metadata: FileMetadata,
+    file_storage: FileStorage,
     addr: SocketAddr,
 ) -> Result<()> {
     let web_config = tonic_web::config();
@@ -59,6 +61,9 @@ pub async fn serve(
             let remote_addr = s.remote_addr();
 
             let mut tonic = tonic.clone();
+            let database = database.clone();
+            let file_metadata = file_metadata.clone();
+            let file_storage = file_storage.clone();
 
             future::ok::<_, Infallible>(tower::service_fn(
                 move |req: hyper::Request<hyper::Body>| {
@@ -79,21 +84,24 @@ pub async fn serve(
                         host = %host.unwrap_or("None"),
                     );
 
-                    match host {
-                        Some(host) if host == "api.localhost" => Either::Left(
-                            tonic
-                                .call(req)
-                                .map_ok(|res| res.map(EitherBody::Left))
-                                .map_err(|err| anyhow!("tonic error: {:?}", err)),
+                    match (req.version(), host) {
+                        (http::Version::HTTP_2, Some(host)) if host == "api.localhost" => {
+                            Either::Left(
+                                tonic
+                                    .call(req)
+                                    .map_ok(|res| res.map(EitherBody::Left))
+                                    .map_err(|err| anyhow!("tonic error: {:?}", err)),
+                            )
+                        }
+                        _ => Either::Right(
+                            web::handle(
+                                req,
+                                database.clone(),
+                                file_metadata.clone(),
+                                file_storage.clone(),
+                            )
+                            .map_ok(|res| res.map(EitherBody::Right)),
                         ),
-                        _host => Either::Right(async {
-                            let res: Result<http::Response<_>> = hyper::Response::builder()
-                                .status(http::status::StatusCode::OK)
-                                .header(http::header::CONTENT_TYPE, "text/plain")
-                                .body(EitherBody::Right(hyper::Body::from("200 ok")))
-                                .map_err(|err| err.into());
-                            res
-                        }),
                     }
                 },
             ))

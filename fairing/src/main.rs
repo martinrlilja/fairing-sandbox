@@ -31,7 +31,7 @@ async fn main() -> Result<()> {
 
         let remote_source = backends::GenericRemoteSource::new();
 
-        let storage = Storage::new(file_storage, database.file_metadata());
+        let storage = Storage::new(file_storage.clone(), database.file_metadata());
 
         let build_service = BuildServiceBuilder::new().concurrent_builds(4).build(
             database.build_queue(),
@@ -54,7 +54,13 @@ async fn main() -> Result<()> {
 
         tracing::info!("server listening on {}", addr);
 
-        server::serve(database.database(), database.file_metadata(), addr).await?;
+        server::serve(
+            database.database(),
+            database.file_metadata(),
+            file_storage,
+            addr,
+        )
+        .await?;
     }
 
     Ok(())

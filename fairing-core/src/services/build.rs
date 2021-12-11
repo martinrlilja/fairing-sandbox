@@ -244,7 +244,9 @@ impl BuildTask {
                 }],
             };
 
-            self.database.create_deployment(&deployment).await?;
+            let deployment = self.database.create_deployment(&deployment).await?;
+
+            tracing::trace!("created deployment: {}", deployment.name.name());
         }
 
         tracing::trace!("build complete");

@@ -34,4 +34,13 @@ pub trait FileMetadataRepository: Send + Sync {
     async fn create_file_chunk(&self, file_chunk: &models::CreateFileChunk) -> Result<()>;
 
     async fn create_layer_member(&self, layer_member: &models::CreateLayerMember) -> Result<()>;
+
+    async fn get_layer_member_file(
+        &self,
+        layer_set_id: models::LayerSetId,
+        layer_id: models::LayerId,
+        path: &str,
+    ) -> Result<Option<models::File>>;
+
+    async fn get_file_chunks(&self, file_id: &models::FileId) -> Result<Vec<Vec<u8>>>;
 }

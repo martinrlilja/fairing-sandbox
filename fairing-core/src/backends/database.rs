@@ -99,6 +99,11 @@ pub trait DeploymentRepository: Send + Sync {
         &self,
         deployment: &models::CreateDeployment,
     ) -> Result<models::Deployment>;
+
+    async fn get_deployment_by_host(
+        &self,
+        lookup: &models::DeploymentHostLookup,
+    ) -> Result<Option<Vec<models::DeploymentProjectionAsdf>>>;
 }
 
 #[async_trait::async_trait]

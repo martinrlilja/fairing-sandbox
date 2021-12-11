@@ -576,7 +576,7 @@ impl database::DeploymentRepository for PostgresDatabase {
         &self,
         deployment: &models::CreateDeployment,
     ) -> Result<models::Deployment> {
-        let deployment = deployment.create()?;
+        let (deployment, projections) = deployment.create()?;
         let deployment_id = Uuid::new_v4();
 
         let mut tx = self.pool.begin().await?;
@@ -606,7 +606,7 @@ impl database::DeploymentRepository for PostgresDatabase {
             deployment.name.name(),
         );
 
-        for projection in deployment.projections.iter() {
+        for projection in projections.iter() {
             let projection_id = Uuid::new_v4();
             let query_result = sqlx::query(
                 r"
@@ -642,6 +642,43 @@ impl database::DeploymentRepository for PostgresDatabase {
         tx.commit().await.context("create deployment (commit)")?;
 
         Ok(deployment)
+    }
+
+    async fn get_deployment_by_host(
+        &self,
+        lookup: &models::DeploymentHostLookup,
+    ) -> Result<Option<Vec<models::DeploymentProjectionAsdf>>> {
+        let tail_labels = lookup.tail_labels();
+
+        // TODO: turn this into a setting.
+        if tail_labels == Some("localhost") {
+            if let (Some(site), Some(deployment)) = (lookup.site(), lookup.deployment()) {
+                let projections = sqlx::query_as(
+                    r"
+                    SELECT t.file_keyspace_id, dp.layer_set_id, dp.layer_id, dp.mount_path, dp.sub_path
+                    FROM deployment_projections dp
+                    JOIN deployments d
+                        ON d.id = dp.deployment_id
+                    JOIN sites s
+                        ON s.id = d.site_id
+                    JOIN teams t
+                        ON t.id = s.team_id
+                    WHERE s.name = $1 AND d.name = $2;
+                    ",
+                )
+                .bind(site)
+                .bind(deployment)
+                .fetch_all(&self.pool)
+                .await?;
+
+                Ok(Some(projections))
+            } else {
+                Ok(None)
+            }
+        } else {
+            // TODO: lookup registered domains
+            Ok(None)
+        }
     }
 }
 
