@@ -55,6 +55,8 @@ impl Storage {
         // Number of bytes chunked so far.
         let mut chunked_bytes = 0_i64;
 
+        let mut utf8_validator = Utf8Validator::new();
+
         pin_mut!(file_stream);
 
         while let Some(file_data) = file_stream.next().await {
@@ -85,6 +87,8 @@ impl Storage {
 
             for chunk in chunker {
                 let chunk_data = &data[chunk.offset..chunk.offset + chunk.length];
+
+                utf8_validator.validate(chunk_data);
 
                 let blob = self.store_blob(chunk_data).await?;
 
@@ -142,7 +146,7 @@ impl Storage {
                 &file.id,
                 &models::FinalizeFile {
                     checksum: checksum.to_vec(),
-                    is_valid_utf8: false,
+                    is_valid_utf8: utf8_validator.is_valid_utf8(),
                 },
             )
             .await?;
@@ -174,5 +178,78 @@ impl Storage {
             compression_algorithm: models::CompressionAlgorithm::Zstd,
             compression_level: COMPRESSION_LEVEL,
         })
+    }
+}
+
+pub struct Utf8Validator {
+    parser: utf8parse::Parser,
+    state: Utf8ValidatorState,
+}
+
+struct Utf8ValidatorState {
+    is_complete: bool,
+    is_valid_utf8: bool,
+}
+
+impl Utf8Validator {
+    pub fn new() -> Utf8Validator {
+        Utf8Validator {
+            parser: utf8parse::Parser::new(),
+            state: Utf8ValidatorState {
+                is_complete: true,
+                is_valid_utf8: true,
+            },
+        }
+    }
+
+    pub fn validate(&mut self, bytes: &[u8]) {
+        if !self.state.is_valid_utf8 {
+            return;
+        }
+
+        for &b in bytes {
+            self.state.is_complete = false;
+            self.parser.advance(&mut self.state, b);
+        }
+    }
+
+    pub fn is_valid_utf8(&self) -> bool {
+        self.state.is_complete && self.state.is_valid_utf8
+    }
+}
+
+impl utf8parse::Receiver for Utf8ValidatorState {
+    fn codepoint(&mut self, _: char) {
+        self.is_complete = true;
+    }
+
+    fn invalid_sequence(&mut self) {
+        self.is_valid_utf8 = false;
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_utf8_validator_valid() {
+        let mut validator = Utf8Validator::new();
+        validator.validate(b"abc\xc3\xa5de");
+        assert!(validator.is_valid_utf8());
+    }
+
+    #[test]
+    fn test_utf8_validator_incomplete() {
+        let mut validator = Utf8Validator::new();
+        validator.validate(b"abc\xc3");
+        assert!(!validator.is_valid_utf8());
+    }
+
+    #[test]
+    fn test_utf8_validator_invalid() {
+        let mut validator = Utf8Validator::new();
+        validator.validate(b"\xc6bc");
+        assert!(!validator.is_valid_utf8());
     }
 }

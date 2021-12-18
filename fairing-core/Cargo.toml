@@ -31,5 +31,6 @@ tracing = "0.1"
 unicode-normalization = "0.1"
 unicode-script = "0.5"
 url = "2"
+utf8parse = "0.2"
 uuid = { version = "0.8", features = ["v4"] }
 zstd = "0.9"
