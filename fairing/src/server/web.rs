@@ -119,7 +119,11 @@ async fn handle_inner(
     Ok(res)
 }
 
-async fn find_layer_member_file(file_metadata: &FileMetadata, projection: &models::DeploymentProjectionAsdf, path: &str) -> Result<Option<(models::File, &'static str)>> {
+async fn find_layer_member_file(
+    file_metadata: &FileMetadata,
+    projection: &models::DeploymentProjectionAsdf,
+    path: &str,
+) -> Result<Option<(models::File, &'static str)>> {
     let exts = if path.ends_with('/') {
         &["index.html", "index.htm"][..]
     } else {
