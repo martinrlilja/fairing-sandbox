@@ -2,6 +2,7 @@ use anyhow::Result;
 use clap::{crate_version, App, AppSettings, SubCommand};
 use fairing_core::services::{BuildServiceBuilder, Storage};
 use tokio::task;
+use tracing_subscriber::prelude::*;
 
 mod backends;
 mod server;
@@ -15,11 +16,13 @@ async fn main() -> Result<()> {
         .subcommand(SubCommand::with_name("server").about("Start the server"))
         .get_matches();
 
-    let subscriber = tracing_subscriber::FmtSubscriber::builder()
-        .with_env_filter(tracing_subscriber::EnvFilter::from_default_env())
-        .finish();
-
-    tracing::subscriber::set_global_default(subscriber).expect("setting default subscriber failed");
+    tracing_subscriber::registry()
+        .with(
+            tracing_subscriber::fmt::layer()
+                .and_then(tracing_subscriber::EnvFilter::from_default_env()),
+        )
+        .with(console_subscriber::spawn())
+        .init();
 
     if let Some(_matches) = matches.subcommand_matches("server") {
         let database =
