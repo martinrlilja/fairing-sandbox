@@ -186,7 +186,7 @@ impl ResourceIDValidator for DomainLabelValidator {
     fn validate(resource_id: &'_ str) -> Option<&'_ str> {
         lazy_static::lazy_static! {
             static ref RE: regex::Regex = regex::Regex::new(
-                r"^[a-z0-9]*(-[a-z0-9]+)*$"
+                r"^[a-z0-9]+(-[a-z0-9]+)*$"
             ).unwrap();
         }
 
