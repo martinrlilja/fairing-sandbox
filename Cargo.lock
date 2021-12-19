@@ -727,6 +727,7 @@ dependencies = [
  "fastcdc",
  "futures-util",
  "hex",
+ "idna",
  "lazy_static",
  "rand",
  "regex",

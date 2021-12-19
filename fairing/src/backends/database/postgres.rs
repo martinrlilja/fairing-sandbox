@@ -463,6 +463,49 @@ impl database::SiteRepository for PostgresDatabase {
     async fn delete_site(&self, _site_name: &models::SiteName) -> Result<()> {
         todo!();
     }
+
+    async fn update_current_deployment(
+        &self,
+        deployment_name: &models::DeploymentName,
+    ) -> Result<()> {
+        let (deployment_id, site_id): (Uuid, Uuid) = sqlx::query_as(
+            r"
+            SELECT d.id, s.id
+            FROM deployments d
+            JOIN sites s
+                ON s.id = d.site_id
+            JOIN teams t
+                ON t.id = s.team_id
+            WHERE t.name = $1 AND s.name = $2 AND d.name = $3;
+            ",
+        )
+        .bind(deployment_name.parent().parent().resource())
+        .bind(deployment_name.parent().resource())
+        .bind(deployment_name.resource())
+        .fetch_one(&self.pool)
+        .await
+        .context("update current deployment (select)")?;
+
+        let query_result = sqlx::query(
+            r"
+            UPDATE sites
+            SET current_deployment_id = $2
+            WHERE id = $1;
+            ",
+        )
+        .bind(site_id)
+        .bind(deployment_id)
+        .execute(&self.pool)
+        .await
+        .context("update current deployment")?;
+
+        ensure!(
+            query_result.rows_affected() == 1,
+            "site was not updated, this is a bug"
+        );
+
+        Ok(())
+    }
 }
 
 #[async_trait::async_trait]
@@ -668,6 +711,25 @@ impl database::DeploymentRepository for PostgresDatabase {
                 )
                 .bind(site)
                 .bind(deployment)
+                .fetch_all(&self.pool)
+                .await?;
+
+                Ok(Some(projections))
+            } else if let Some(site) = lookup.site() {
+                let projections = sqlx::query_as(
+                    r"
+                    SELECT t.file_keyspace_id, dp.layer_set_id, dp.layer_id, dp.mount_path, dp.sub_path
+                    FROM deployment_projections dp
+                    JOIN deployments d
+                        ON d.id = dp.deployment_id
+                    JOIN sites s
+                        ON s.current_deployment_id = d.id
+                    JOIN teams t
+                        ON t.id = s.team_id
+                    WHERE s.name = $1;
+                    ",
+                )
+                .bind(site)
                 .fetch_all(&self.pool)
                 .await?;
 

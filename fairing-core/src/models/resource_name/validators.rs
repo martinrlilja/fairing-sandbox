@@ -145,7 +145,7 @@ impl ResourceIDValidator for UnicodeIdentifierValidator {
             // Allow unicode letters, numbers and a handful of separators.
             // https://unicode.org/reports/tr18/#General_Category_Property
             static ref RE: regex::Regex = regex::Regex::new(
-                r"^[\p{letter}\p{number}]+([_.-][\p{letter}\p{number}]+)*$"
+                r"^[\p{letter}\p{number}]+([_.:-][\p{letter}\p{number}]+)*$"
             ).unwrap();
 
             static ref ALLOWED_SCRIPTS: Vec<HashSet<Script>> = UnicodeIdentifierValidator::allowed_scripts();

@@ -121,6 +121,7 @@ pub struct DeploymentHostLookup<'a> {
     site: Option<Range<usize>>,
     deployment: Option<Range<usize>>,
     tail_labels: Option<Range<usize>>,
+    idna: Option<String>,
 }
 
 impl<'a> DeploymentHostLookup<'a> {
@@ -128,10 +129,6 @@ impl<'a> DeploymentHostLookup<'a> {
         lazy_static::lazy_static! {
             static ref RE: regex::Regex = regex::Regex::new(
                 r"^((([a-z0-9]+)(-+[a-z0-9]+)*)(\.(([a-z0-9]+)(-+[a-z0-9]+)*)(\.([a-z0-9]+)(-+[a-z0-9]+)*)*)?)\.?(:[1-9][0-9]*)?$",
-            ).unwrap();
-
-            static ref RE_DEPLOY: regex::Regex = regex::Regex::new(
-                r"^([a-z0-9]{20})--(([a-z0-9]+)(-+[a-z0-9]+)*)$",
             ).unwrap();
         }
 
@@ -142,30 +139,46 @@ impl<'a> DeploymentHostLookup<'a> {
         let tail_labels = captures.get(6);
 
         if first_label.starts_with("xn--") {
-            // TODO: handle international domains.
+            let (idna, _) = idna::domain_to_unicode(first_label);
+
+            let (site, deployment) = DeploymentHostLookup::parse_first_label(&idna);
+
             Some(DeploymentHostLookup {
                 base_str: s,
                 host: 0..host.len(),
-                site: None,
-                deployment: None,
-                tail_labels: None,
-            })
-        } else if let Some(deploy_captures) = RE_DEPLOY.captures(first_label) {
-            Some(DeploymentHostLookup {
-                base_str: s,
-                host: 0..host.len(),
-                site: deploy_captures.get(2).map(|site| site.range()),
-                deployment: deploy_captures.get(1).map(|deployment| deployment.range()),
+                site,
+                deployment,
                 tail_labels: tail_labels.map(|tail_labels| tail_labels.range()),
+                idna: Some(idna),
             })
         } else {
+            let (site, deployment) = DeploymentHostLookup::parse_first_label(first_label);
+
             Some(DeploymentHostLookup {
                 base_str: s,
                 host: 0..host.len(),
-                site: None,
-                deployment: None,
-                tail_labels: None,
+                site,
+                deployment,
+                tail_labels: tail_labels.map(|tail_labels| tail_labels.range()),
+                idna: None,
             })
+        }
+    }
+
+    fn parse_first_label(first_label: &str) -> (Option<Range<usize>>, Option<Range<usize>>) {
+        lazy_static::lazy_static! {
+            static ref RE_DEPLOY: regex::Regex = regex::Regex::new(
+                r"^([a-z0-9]{20})--(([a-z0-9]+)(-+[a-z0-9]+)*)$",
+            ).unwrap();
+        }
+
+        if let Some(deploy_captures) = RE_DEPLOY.captures(first_label) {
+            (
+                deploy_captures.get(2).map(|site| site.range()),
+                deploy_captures.get(1).map(|deployment| deployment.range()),
+            )
+        } else {
+            (Some(0..first_label.len()), None)
         }
     }
 
@@ -174,13 +187,21 @@ impl<'a> DeploymentHostLookup<'a> {
     }
 
     pub fn site(&self) -> Option<&str> {
-        self.site.clone().map(|site| &self.base_str[site])
+        if let Some(idna) = self.idna.as_ref() {
+            self.site.clone().map(|site| &idna[site])
+        } else {
+            self.site.clone().map(|site| &self.base_str[site])
+        }
     }
 
     pub fn deployment(&self) -> Option<&str> {
-        self.deployment
-            .clone()
-            .map(|deployment| &self.base_str[deployment])
+        if let Some(idna) = self.idna.as_ref() {
+            self.deployment.clone().map(|deployment| &idna[deployment])
+        } else {
+            self.deployment
+                .clone()
+                .map(|deployment| &self.base_str[deployment])
+        }
     }
 
     pub fn tail_labels(&self) -> Option<&str> {

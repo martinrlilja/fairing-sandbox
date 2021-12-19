@@ -14,8 +14,7 @@ crate::impl_resource_name! {
 impl<'n> ParentedResourceName<'n> for LayerSetName<'n> {
     const COLLECTION: &'static str = "layersets";
 
-    // FIXME: restrict this.
-    type Validator = validators::AnyValidator;
+    type Validator = validators::UnicodeIdentifierValidator;
 
     type Parent = models::SourceName<'static>;
 }

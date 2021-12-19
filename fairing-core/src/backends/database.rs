@@ -86,6 +86,11 @@ pub trait SiteRepository: Send + Sync {
     async fn create_site(&self, site: &models::CreateSite) -> Result<models::Site>;
 
     async fn delete_site(&self, site_name: &models::SiteName) -> Result<()>;
+
+    async fn update_current_deployment(
+        &self,
+        deployment_name: &models::DeploymentName,
+    ) -> Result<()>;
 }
 
 #[async_trait::async_trait]

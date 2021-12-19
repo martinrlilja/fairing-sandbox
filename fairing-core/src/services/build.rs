@@ -246,6 +246,11 @@ impl BuildTask {
 
             let deployment = self.database.create_deployment(&deployment).await?;
 
+            // TODO: only update this if the build is of the HEAD branch.
+            self.database
+                .update_current_deployment(&deployment.name)
+                .await?;
+
             tracing::trace!("created deployment: {}", deployment.name.name());
         }
 
