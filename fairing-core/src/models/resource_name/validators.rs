@@ -5,20 +5,6 @@ pub trait ResourceIDValidator {
     fn validate(resource_id: &'_ str) -> Option<&'_ str>;
 }
 
-pub enum AnyValidator {}
-
-impl ResourceIDValidator for AnyValidator {
-    fn validate(resource_id: &'_ str) -> Option<&'_ str> {
-        let resource_id = resource_id.split('/').next()?;
-
-        if resource_id.len() > 1 && resource_id.len() < 128 {
-            Some(resource_id)
-        } else {
-            None
-        }
-    }
-}
-
 /// Validator identifiers with Unicode support. Allows letters, numbers, `-` (dash), `.` (period)
 /// and `_` (underscore).
 ///

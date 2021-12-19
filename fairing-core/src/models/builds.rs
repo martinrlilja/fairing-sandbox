@@ -16,7 +16,7 @@ impl<'n> ParentedResourceName<'n> for BuildName<'n> {
     const COLLECTION: &'static str = "builds";
 
     // FIXME: restrict this.
-    type Validator = validators::AnyValidator;
+    type Validator = validators::DomainLabelValidator;
 
     type Parent = models::LayerSetName<'static>;
 }
