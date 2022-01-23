@@ -23,10 +23,13 @@ hex = "0.4"
 http = "0.2"
 http-body = "0.4.2"
 hyper = "0.14"
+hyper-rustls = "0.23"
 memmap = "0.7"
 miniz_oxide = "0.4"
 nom = "7"
+rcgen = "0.8"
 rocksdb = { version = "0.17", default-features = false }
+rustls = "0.20"
 serde = { version = "1", features = ["derive"] }
 sha-1 = "0.9"
 sqlx = { version = "0.5", features = ["postgres", "uuid", "chrono", "runtime-tokio-rustls"] }
@@ -34,6 +37,7 @@ thrussh = "0.32"
 thrussh-keys = "0.20"
 tokio = { version = "1", features = ["fs", "macros", "rt-multi-thread", "sync", "tracing"] }
 tokio-stream = "0.1"
+tokio-rustls = "0.23"
 tonic = "0.6"
 tonic-web = "0.2"
 tower = "0.4"

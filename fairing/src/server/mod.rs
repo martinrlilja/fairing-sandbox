@@ -8,16 +8,19 @@ use fairing_proto::{
     teams::v1beta1::teams_server::TeamsServer, users::v1beta1::users_server::UsersServer,
 };
 use futures::future::{self, Either, TryFutureExt};
-use hyper::{server::conn::AddrStream, service::make_service_fn, Server};
+use hyper::{service::make_service_fn, Server};
 use std::{
     convert::Infallible,
     net::SocketAddr,
     pin::Pin,
     task::{Context, Poll},
 };
+use tokio::net::{TcpListener, TcpStream};
+use tokio_rustls::server::TlsStream;
 use tonic::{transport::Server as TonicServer, Request, Status};
 use tower::Service;
 
+mod certificate_resolver;
 mod sites;
 mod sources;
 mod teams;
@@ -56,9 +59,26 @@ pub async fn serve(
         .add_service(web_config.enable(sources_server))
         .into_service();
 
-    Server::bind(&addr)
-        .serve(make_service_fn(move |s: &AddrStream| {
-            let remote_addr = s.remote_addr();
+    let certificate_resolver = certificate_resolver::CertificateResolver::new(database.clone());
+
+    let tcp_listener = TcpListener::bind(&addr).await?;
+    let incoming_tls_stream = certificate_resolver::accept(tcp_listener, certificate_resolver);
+
+    let acceptor = hyper::server::accept::from_stream(incoming_tls_stream);
+
+    Server::builder(acceptor)
+        .serve(make_service_fn(move |s: &TlsStream<TcpStream>| {
+            let remote_addr = {
+                let (tcp_stream, _) = s.get_ref();
+                tcp_stream.peer_addr().unwrap()
+            };
+
+            let sni_hostname = {
+                let (_, connection) = s.get_ref();
+                connection.sni_hostname()
+            };
+
+            tracing::info!("{:?}", sni_hostname);
 
             let mut tonic = tonic.clone();
             let database = database.clone();
