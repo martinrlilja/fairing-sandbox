@@ -127,7 +127,7 @@ pub trait ResourceName<'n>: ResourceNameConstructor<'n> {
     /// # }
     /// # impl<'n> ResourceName<'n> for TeamName<'n> {
     /// #     const COLLECTION: &'static str = "teams";
-    /// #     type Validator = validators::AnyValidator;
+    /// #     type Validator = validators::DomainLabelValidator;
     /// # }
     /// assert_eq!(
     ///     TeamName::match_len("teams/test-team/sites/test-site"),
@@ -238,13 +238,13 @@ mod tests {
     impl<'n> ResourceName<'n> for TeamName<'n> {
         const COLLECTION: &'static str = "teams";
 
-        type Validator = validators::AnyValidator;
+        type Validator = validators::DomainLabelValidator;
     }
 
     impl<'n> ParentedResourceName<'n> for SiteName<'n> {
         const COLLECTION: &'static str = "sites";
 
-        type Validator = validators::AnyValidator;
+        type Validator = validators::DomainLabelValidator;
 
         type Parent = TeamName<'static>;
     }
@@ -252,7 +252,7 @@ mod tests {
     impl<'n> ParentedResourceName<'n> for SiteSourceName<'n> {
         const COLLECTION: &'static str = "sources";
 
-        type Validator = validators::AnyValidator;
+        type Validator = validators::DomainLabelValidator;
 
         type Parent = SiteName<'static>;
     }
