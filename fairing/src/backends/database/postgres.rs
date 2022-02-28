@@ -745,6 +745,120 @@ impl database::DeploymentRepository for PostgresDatabase {
 }
 
 #[async_trait::async_trait]
+impl database::DomainRepository for PostgresDatabase {
+    async fn create_domain(&self, domain: &models::CreateDomain) -> Result<models::Domain> {
+        let domain = domain.create()?;
+        let domain_id = Uuid::new_v4();
+
+        sqlx::query(
+            r"
+            INSERT INTO domains (id, team_id, created_time, name, acme_label, is_validated)
+            SELECT $1, t.id, $2, $3, $4, $5
+            FROM teams t
+            WHERE t.name = $6;
+            ",
+        )
+        .bind(&domain_id)
+        .bind(&domain.created_time)
+        .bind(domain.name.resource())
+        .bind(&domain.acme_label)
+        .bind(domain.is_validated)
+        .bind(domain.name.parent().resource())
+        .execute(&self.pool)
+        .await
+        .context("create domain")?;
+
+        Ok(domain)
+    }
+
+    async fn create_certificate(
+        &self,
+        _certificate: &models::CreateCertificate,
+    ) -> Result<models::Certificate> {
+        todo!();
+    }
+
+    async fn create_acme_order(&self, acme_order: &models::CreateAcmeOrder) -> Result<()> {
+        let (team_name, order, challenges) = acme_order.create()?;
+        let order_id = Uuid::new_v4();
+
+        let mut tx = self.pool.begin().await?;
+
+        sqlx::query(
+            r"
+            INSERT INTO acme_orders (id, team_id, created_time, expires_time, status, url)
+            SELECT $1, t.id, $2, $3, $4, $5
+            FROM teams t
+            WHERE t.name = $6;
+            ",
+        )
+        .bind(&order_id)
+        .bind(&order.created_time)
+        .bind(&order.expires_time)
+        .bind(order.status)
+        .bind(&order.url)
+        .bind(team_name.resource())
+        .execute(&mut tx)
+        .await
+        .context("create acme order")?;
+
+        for challenge in challenges {
+            let challenge_id = Uuid::new_v4();
+
+            sqlx::query(
+                r"
+                INSERT INTO acme_challenges (id, team_id, acme_order_id, domain_id, dns_01_token)
+                SELECT $1, t.id, ao.id, s.id, $2
+                FROM acme_orders ao
+                JOIN teams t
+                    ON t.id = ao.team_id
+                JOIN sites s
+                    ON s.team_id = t.id
+                WHERE ao.id = $3
+                ",
+            )
+            .bind(&challenge_id)
+            .bind(&challenge.dns_01_token)
+            .bind(order_id)
+            .bind(challenge.domain.resource())
+            .execute(&mut tx)
+            .await
+            .context("create acme challenge")?;
+        }
+
+        tx.commit().await?;
+
+        Ok(())
+    }
+
+    async fn get_domain_acme_challenge(
+        &self,
+        acme_label: &str,
+    ) -> Result<Option<models::AcmeChallenge>> {
+        let challenge = sqlx::query_as(
+            r"
+            SELECT 'teams/' || t.name || '/domains/' || d.name AS name,
+                    ac.dns_01_token
+            FROM acme_challenges ac
+            JOIN acme_orders ao
+                ON ao.id = ac.acme_order_id
+            JOIN domains d
+                ON d.id = ac.domain_id
+            JOIN teams t
+                ON t.id = ac.team_id
+            WHERE d.acme_label = $1;
+            ",
+        )
+        .bind(acme_label)
+        .fetch_optional(&self.pool)
+        .await
+        .context("getting acme challenge")?;
+
+        Ok(challenge)
+    }
+}
+
+#[async_trait::async_trait]
 impl database::LayerRepository for PostgresDatabase {
     async fn list_layer_sets(
         &self,

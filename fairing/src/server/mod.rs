@@ -4,8 +4,9 @@ use fairing_core::{
     models::{self, prelude::*},
 };
 use fairing_proto::{
-    sites::v1beta1::sites_server::SitesServer, sources::v1beta1::sources_server::SourcesServer,
-    teams::v1beta1::teams_server::TeamsServer, users::v1beta1::users_server::UsersServer,
+    domains::v1beta1::domains_server::DomainsServer, sites::v1beta1::sites_server::SitesServer,
+    sources::v1beta1::sources_server::SourcesServer, teams::v1beta1::teams_server::TeamsServer,
+    users::v1beta1::users_server::UsersServer,
 };
 use futures::future::{self, Either, TryFutureExt};
 use hyper::{service::make_service_fn, Server};
@@ -21,6 +22,7 @@ use tonic::{transport::Server as TonicServer, Request, Status};
 use tower::Service;
 
 mod certificate_resolver;
+mod domains;
 mod sites;
 mod sources;
 mod teams;
@@ -31,8 +33,52 @@ pub async fn serve(
     database: Database,
     file_metadata: FileMetadata,
     file_storage: FileStorage,
-    addr: SocketAddr,
+    http_addr: SocketAddr,
+    https_addr: SocketAddr,
 ) -> Result<()> {
+    let certificate_resolver = certificate_resolver::CertificateResolver::new(database.clone());
+
+    let http_listener = TcpListener::bind(&http_addr).await?;
+    let https_listener = TcpListener::bind(&https_addr).await?;
+
+    let http_acceptor = hyper::server::conn::AddrIncoming::from_listener(http_listener)?;
+
+    let incoming_tls_stream = certificate_resolver::accept(https_listener, certificate_resolver);
+
+    let https_acceptor = hyper::server::accept::from_stream(incoming_tls_stream);
+
+    let http = {
+        let database = database.clone();
+        let file_metadata = file_metadata.clone();
+        let file_storage = file_storage.clone();
+        tokio::spawn(
+            async move { server(database, file_metadata, file_storage, http_acceptor).await },
+        )
+    };
+
+    let https =
+        tokio::spawn(
+            async move { server(database, file_metadata, file_storage, https_acceptor).await },
+        );
+
+    http.await??;
+    https.await??;
+
+    Ok(())
+}
+
+async fn server<Accept>(
+    database: Database,
+    file_metadata: FileMetadata,
+    file_storage: FileStorage,
+    acceptor: Accept,
+) -> Result<()>
+where
+    Accept: hyper::server::accept::Accept,
+    Accept::Error: Into<Box<dyn std::error::Error + Send + Sync>>,
+    Accept::Conn:
+        ConnectionInfo + tokio::io::AsyncRead + tokio::io::AsyncWrite + Unpin + Send + 'static,
+{
     let web_config = tonic_web::config();
     let auth = AuthInterceptor::new(&database);
 
@@ -40,6 +86,11 @@ pub async fn serve(
 
     let teams_server = TeamsServer::with_interceptor(
         teams::TeamsService::new(&database, &file_metadata),
+        auth.interceptor(),
+    );
+
+    let domains_server = DomainsServer::with_interceptor(
+        domains::DomainsService::new(&database),
         auth.interceptor(),
     );
 
@@ -53,32 +104,17 @@ pub async fn serve(
 
     let tonic = TonicServer::builder()
         .accept_http1(true)
+        .add_service(web_config.enable(domains_server))
         .add_service(web_config.enable(users_server))
         .add_service(web_config.enable(teams_server))
         .add_service(web_config.enable(sites_server))
         .add_service(web_config.enable(sources_server))
         .into_service();
 
-    let certificate_resolver = certificate_resolver::CertificateResolver::new(database.clone());
-
-    let tcp_listener = TcpListener::bind(&addr).await?;
-    let incoming_tls_stream = certificate_resolver::accept(tcp_listener, certificate_resolver);
-
-    let acceptor = hyper::server::accept::from_stream(incoming_tls_stream);
-
     Server::builder(acceptor)
-        .serve(make_service_fn(move |s: &TlsStream<TcpStream>| {
-            let remote_addr = {
-                let (tcp_stream, _) = s.get_ref();
-                tcp_stream.peer_addr().unwrap()
-            };
-
-            let sni_hostname = {
-                let (_, connection) = s.get_ref();
-                connection.sni_hostname()
-            };
-
-            tracing::info!("{:?}", sni_hostname);
+        .serve(make_service_fn(move |s: &Accept::Conn| {
+            let remote_addr = s.remote_addr();
+            let _sni_hostname = s.sni_hostname();
 
             let mut tonic = tonic.clone();
             let database = database.clone();
@@ -93,6 +129,15 @@ pub async fn serve(
                             .and_then(|host| host.to_str().ok())
                             .and_then(|host| host.split(':').next())
                     });
+
+                    /*
+                    match (sni_hostname, host) {
+                        (Some(sni_hostname), Some(host)) if !sni_hostname.eq_ignore_ascii_case(host) => {
+                            tracing::error!("sni hostname does not match request host");
+                        }
+                        _ => (),
+                    }
+                    */
 
                     let path = req.uri().path_and_query().map(|p| p.as_str());
 
@@ -251,4 +296,32 @@ where
 
 fn map_option_err<T, U: Into<Error>>(err: Option<Result<T, U>>) -> Option<Result<T, Error>> {
     err.map(|e| e.map_err(Into::into))
+}
+
+trait ConnectionInfo {
+    fn remote_addr(&self) -> SocketAddr;
+
+    fn sni_hostname(&self) -> Option<&str>;
+}
+
+impl ConnectionInfo for TlsStream<TcpStream> {
+    fn remote_addr(&self) -> SocketAddr {
+        let (tcp_stream, _) = self.get_ref();
+        tcp_stream.peer_addr().unwrap()
+    }
+
+    fn sni_hostname(&self) -> Option<&str> {
+        let (_, connection) = self.get_ref();
+        connection.sni_hostname()
+    }
+}
+
+impl ConnectionInfo for hyper::server::conn::AddrStream {
+    fn remote_addr(&self) -> SocketAddr {
+        self.remote_addr()
+    }
+
+    fn sni_hostname(&self) -> Option<&str> {
+        None
+    }
 }

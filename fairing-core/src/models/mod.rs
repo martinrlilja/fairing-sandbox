@@ -2,6 +2,7 @@
 
 pub use builds::*;
 pub use deployments::*;
+pub use domains::*;
 pub use files::*;
 pub use layers::*;
 pub use sites::*;
@@ -11,6 +12,7 @@ pub use users::*;
 
 mod builds;
 mod deployments;
+mod domains;
 mod files;
 mod layers;
 pub mod prelude;

@@ -12,6 +12,7 @@ pub trait DatabaseBackend:
     + SourceRepository
     + SiteRepository
     + DeploymentRepository
+    + DomainRepository
     + LayerRepository
 {
 }
@@ -23,6 +24,7 @@ impl<T> DatabaseBackend for T where
         + SourceRepository
         + SiteRepository
         + DeploymentRepository
+        + DomainRepository
         + LayerRepository
 {
 }
@@ -109,6 +111,23 @@ pub trait DeploymentRepository: Send + Sync {
         &self,
         lookup: &models::DeploymentHostLookup,
     ) -> Result<Option<Vec<models::DeploymentProjectionAsdf>>>;
+}
+
+#[async_trait::async_trait]
+pub trait DomainRepository: Send + Sync {
+    async fn create_domain(&self, domain: &models::CreateDomain) -> Result<models::Domain>;
+
+    async fn create_certificate(
+        &self,
+        certificate: &models::CreateCertificate,
+    ) -> Result<models::Certificate>;
+
+    async fn create_acme_order(&self, acme_order: &models::CreateAcmeOrder) -> Result<()>;
+
+    async fn get_domain_acme_challenge(
+        &self,
+        acme_label: &str,
+    ) -> Result<Option<models::AcmeChallenge>>;
 }
 
 #[async_trait::async_trait]

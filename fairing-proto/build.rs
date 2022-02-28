@@ -1,5 +1,6 @@
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     const PROTO_FILES: &[&str] = &[
+        "../proto/domains/v1beta1/domains.proto",
         "../proto/sites/v1beta1/sites.proto",
         "../proto/sources/v1beta1/sources.proto",
         "../proto/teams/v1beta1/teams.proto",

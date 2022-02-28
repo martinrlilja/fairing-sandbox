@@ -51,18 +51,6 @@ CREATE TABLE sites (
     base_source_id UUID REFERENCES sources (id) ON DELETE RESTRICT NOT NULL
 );
 
--- Domains
-CREATE TABLE domains (
-    id UUID PRIMARY KEY,
-    created_time TIMESTAMPTZ NOT NULL,
-    site_id UUID REFERENCES sites (id) ON DELETE CASCADE NOT NULL,
-
-    fqdn TEXT NOT NULL,
-    is_validated BOOLEAN DEFAULT TRUE
-);
-
-CREATE UNIQUE INDEX domain_fqdn ON domains (fqdn) WHERE is_validated = TRUE;
-
 -- Storage layers
 CREATE TABLE layer_sets (
     id UUID PRIMARY KEY,
@@ -168,4 +156,72 @@ CREATE TABLE layer_members (
 
     PRIMARY KEY (layer_set_id, path, layer_id),
     FOREIGN KEY (file_keyspace, file_checksum) REFERENCES files (file_keyspace, checksum) ON DELETE CASCADE
+);
+
+-- Domains
+CREATE TABLE domains (
+    id UUID NOT NULL,
+    team_id UUID REFERENCES teams (id) ON DELETE CASCADE NOT NULL,
+    site_id UUID REFERENCES sites (id) ON DELETE CASCADE DEFAULT NULL,
+
+    created_time TIMESTAMPTZ NOT NULL,
+
+    name TEXT NOT NULL,
+    acme_label TEXT UNIQUE NOT NULL,
+    is_validated BOOLEAN DEFAULT FALSE,
+
+    PRIMARY KEY (team_id, id)
+);
+
+CREATE UNIQUE INDEX domain_teams_name ON domains (team_id, name);
+CREATE UNIQUE INDEX domain_global_name ON domains (name) WHERE is_validated = TRUE;
+
+CREATE TABLE certificates (
+    id UUID NOT NULL,
+    team_id UUID NOT NULL,
+    domain_id UUID NOT NULL,
+
+    created_time TIMESTAMPTZ NOT NULL,
+    expires_time TIMESTAMPTZ NOT NULL,
+
+    private_key BYTEA NOT NULL,
+    public_key_chain BYTEA[] NOT NULL,
+
+    PRIMARY KEY (team_id, domain_id, id),
+    FOREIGN KEY (team_id, domain_id) REFERENCES domains (team_id, id) ON DELETE CASCADE
+);
+
+-- ACME
+CREATE TYPE acme_order_status AS ENUM (
+    'pending',
+    'ready',
+    'processing',
+    'valid',
+    'invalid'
+);
+
+CREATE TABLE acme_orders (
+    id UUID NOT NULL,
+    team_id UUID REFERENCES teams (id) ON DELETE CASCADE NOT NULL,
+
+    created_time TIMESTAMPTZ NOT NULL,
+    expires_time TIMESTAMPTZ NOT NULL,
+
+    status acme_order_status NOT NULL,
+    url TEXT NOT NULL,
+
+    PRIMARY KEY (team_id, id)
+);
+
+CREATE TABLE acme_challenges (
+    id UUID NOT NULL,
+    team_id UUID REFERENCES teams (id) ON DELETE CASCADE NOT NULL,
+    acme_order_id UUID NOT NULL,
+    domain_id UUID NOT NULL,
+
+    dns_01_token TEXT NOT NULL,
+
+    PRIMARY KEY (team_id, acme_order_id, id),
+    FOREIGN KEY (team_id, acme_order_id) REFERENCES acme_orders (team_id, id) ON DELETE CASCADE,
+    FOREIGN KEY (team_id, domain_id) REFERENCES domains (team_id, id) ON DELETE CASCADE
 );

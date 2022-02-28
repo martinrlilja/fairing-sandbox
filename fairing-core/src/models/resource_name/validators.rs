@@ -166,6 +166,26 @@ impl ResourceIDValidator for UnicodeIdentifierValidator {
     }
 }
 
+pub enum DomainNameValidator {}
+
+impl ResourceIDValidator for DomainNameValidator {
+    fn validate(resource_id: &'_ str) -> Option<&'_ str> {
+        lazy_static::lazy_static! {
+            static ref RE: regex::Regex = regex::Regex::new(
+                r"^[a-z0-9]+(-[a-z0-9]+)*(\.[a-z0-9]+(-[a-z0-9]+)*)*$"
+            ).unwrap();
+        }
+
+        let resource_id = resource_id.split('/').next()?;
+
+        if resource_id.len() < 64 && RE.is_match(resource_id) {
+            Some(resource_id)
+        } else {
+            None
+        }
+    }
+}
+
 pub enum DomainLabelValidator {}
 
 impl ResourceIDValidator for DomainLabelValidator {

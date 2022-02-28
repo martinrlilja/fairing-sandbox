@@ -14,8 +14,9 @@ async-trait = "0.1"
 base64 = "0.13"
 bincode = "1"
 bytes = "1"
-clap = "2"
+clap = "3"
 console-subscriber = "0.1"
+fairing-acme = { path = "../fairing-acme" }
 fairing-core = { path = "../fairing-core" }
 fairing-proto = { path = "../fairing-proto" }
 futures = "0.3"
@@ -36,12 +37,15 @@ sqlx = { version = "0.5", features = ["postgres", "uuid", "chrono", "runtime-tok
 thrussh = "0.32"
 thrussh-keys = "0.20"
 tokio = { version = "1", features = ["fs", "macros", "rt-multi-thread", "sync", "tracing"] }
-tokio-stream = "0.1"
 tokio-rustls = "0.23"
+tokio-stream = "0.1"
 tonic = "0.6"
 tonic-web = "0.2"
 tower = "0.4"
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+trust-dns-client = "0.21"
+trust-dns-proto = "0.21"
+trust-dns-server = "0.21"
 uuid = { version = "0.8", features = ["v4"] }
 zstd = "0.9"

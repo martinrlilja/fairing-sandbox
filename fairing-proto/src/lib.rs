@@ -1,3 +1,9 @@
+pub mod domains {
+    pub mod v1beta1 {
+        tonic::include_proto!("fairing.domains.v1beta1");
+    }
+}
+
 pub mod sites {
     pub mod v1beta1 {
         tonic::include_proto!("fairing.sites.v1beta1");

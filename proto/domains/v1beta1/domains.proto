@@ -1,0 +1,19 @@
+syntax = "proto3";
+
+package fairing.domains.v1beta1;
+
+service Domains {
+  // Create a domain in a team.
+  rpc CreateDomain(CreateDomainRequest) returns (Domain);
+}
+
+message Domain {
+  string name = 1;
+  string acme_label = 3;
+  bool is_validated = 4;
+}
+
+message CreateDomainRequest {
+  string resource_id = 1;
+  string parent = 2;
+}

@@ -78,6 +78,22 @@ async fn main() -> Result<()> {
                 .arg(Arg::with_name("source")),
             )
         )
+        .subcommand(
+            SubCommand::with_name("domains")
+                .about("Domain management")
+                .setting(AppSettings::SubcommandRequiredElseHelp)
+                .subcommand(
+                    SubCommand::with_name("create")
+                    .about("Create a domain")
+                    .arg(Arg::with_name("team")
+                                .help("Team name to create this site under. Format: teams/<team>"),
+                        )
+                        .arg(
+                            Arg::with_name("domain-name")
+                                .help("Domain name that you want to add to your team."),
+                        )
+                )
+        )
         .get_matches();
 
     let subscriber = tracing_subscriber::FmtSubscriber::builder()
@@ -94,6 +110,8 @@ async fn main() -> Result<()> {
         command_sites(&matches).await?;
     } else if let Some(matches) = matches.subcommand_matches("sources") {
         command_sources(&matches).await?;
+    } else if let Some(matches) = matches.subcommand_matches("domains") {
+        command_domains(&matches).await?;
     }
 
     Ok(())
@@ -109,7 +127,7 @@ async fn command_users(matches: &ArgMatches<'_>) -> Result<()> {
     let mut stdin = stdin.lock();
 
     let mut users_client = fairing_proto::users::v1beta1::users_client::UsersClient::connect(
-        "http://api.localhost:8000",
+        "http://api.localhost:8080",
     )
     .await?;
 
@@ -193,7 +211,7 @@ async fn command_teams(matches: &ArgMatches<'_>) -> Result<()> {
         teams_client::TeamsClient, CreateTeamRequest, ListTeamsRequest,
     };
 
-    let channel = Channel::from_static("http://api.localhost:8000")
+    let channel = Channel::from_static("http://api.localhost:8080")
         .connect()
         .await?;
     let auth = ConfigAuth::read().await?;
@@ -237,7 +255,7 @@ async fn command_sites(matches: &ArgMatches<'_>) -> Result<()> {
         source, sources_client::SourcesClient, CreateSourceRequest, Source,
     };
 
-    let channel = Channel::from_static("http://api.localhost:8000")
+    let channel = Channel::from_static("http://api.localhost:8080")
         .connect()
         .await?;
     let auth = ConfigAuth::read().await?;
@@ -320,7 +338,7 @@ async fn command_sites(matches: &ArgMatches<'_>) -> Result<()> {
 async fn command_sources(matches: &ArgMatches<'_>) -> Result<()> {
     use fairing_proto::sources::v1beta1::{sources_client::SourcesClient, RefreshSourceRequest};
 
-    let channel = Channel::from_static("http://api.localhost:8000")
+    let channel = Channel::from_static("http://api.localhost:8080")
         .connect()
         .await?;
     let auth = ConfigAuth::read().await?;
@@ -335,6 +353,35 @@ async fn command_sources(matches: &ArgMatches<'_>) -> Result<()> {
             .await?;
 
         println!("Refreshed source");
+    }
+
+    Ok(())
+}
+
+async fn command_domains(matches: &ArgMatches<'_>) -> Result<()> {
+    use fairing_proto::domains::v1beta1::{domains_client::DomainsClient, CreateDomainRequest};
+
+    let channel = Channel::from_static("http://api.localhost:8080")
+        .connect()
+        .await?;
+    let auth = ConfigAuth::read().await?;
+
+    let mut domains_client = DomainsClient::with_interceptor(channel, auth);
+
+    if let Some(matches) = matches.subcommand_matches("create") {
+        let team_name = matches.value_of("team").expect("team name must be set");
+        let domain_name = matches
+            .value_of("domain-name")
+            .expect("domain name must be set");
+
+        let response = domains_client
+            .create_domain(CreateDomainRequest {
+                resource_id: domain_name.into(),
+                parent: team_name.into(),
+            })
+            .await?;
+
+        println!("Created domain: {}", response.get_ref().name);
     }
 
     Ok(())
