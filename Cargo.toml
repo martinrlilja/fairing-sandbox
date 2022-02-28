@@ -1,6 +1,7 @@
 [workspace]
 members = [
     "fairing",
+    "fairing-acme",
     "fairing-core",
     "fairing-proto",
     "fairingctl",
