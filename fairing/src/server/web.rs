@@ -2,7 +2,7 @@ use anyhow::Result;
 
 use fairing_core::{
     backends::{Database, FileMetadata, FileStorage},
-    models::{self, prelude::*},
+    models,
 };
 
 pub async fn handle(

@@ -3,6 +3,7 @@ name = "fairing"
 version = "0.1.0"
 authors = ["Martin Risell Lilja <martin.risell.lilja@gmail.com>"]
 edition = "2021"
+description = "WebAssembly powered static sites."
 
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 
@@ -14,8 +15,9 @@ async-trait = "0.1"
 base64 = "0.13"
 bincode = "1"
 bytes = "1"
-clap = "3"
+clap = { version = "3", features = ["derive"] }
 console-subscriber = "0.1"
+config = { version = "0.12", default-features = false, features = ["json", "toml"] }
 fairing-acme = { path = "../fairing-acme" }
 fairing-core = { path = "../fairing-core" }
 fairing-proto = { path = "../fairing-proto" }
@@ -28,6 +30,7 @@ hyper-rustls = "0.23"
 memmap = "0.7"
 miniz_oxide = "0.4"
 nom = "7"
+rand = "0.8"
 rcgen = "0.8"
 rocksdb = { version = "0.17", default-features = false }
 rustls = "0.20"

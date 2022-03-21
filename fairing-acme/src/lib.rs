@@ -4,6 +4,7 @@ use p256::{
     SecretKey,
 };
 use rand_core::OsRng;
+use sha2::{Digest, Sha256};
 
 #[derive(Clone, Debug, serde::Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -17,14 +18,14 @@ pub struct Directory {
 #[derive(Clone, Debug, serde::Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct DirectoryMeta {
-    pub termsOfService: String,
+    pub terms_of_service: String,
     pub website: Option<String>,
     #[serde(default)]
-    pub caaIdentities: Vec<String>,
+    pub caa_identities: Vec<String>,
 }
 
 #[derive(Clone, Debug)]
-pub struct AccountId(String);
+pub struct AccountId(pub String);
 
 #[derive(Clone, Debug, serde::Deserialize, serde::Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -135,6 +136,12 @@ pub enum ChallengeType {
     TlsAlpn01,
 }
 
+#[derive(Clone, Debug)]
+pub struct CreateResponse<T> {
+    pub url: String,
+    pub body: T,
+}
+
 #[derive(Clone, Debug, serde::Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct Jose {
@@ -234,12 +241,20 @@ pub trait AcmeBackend {
         key: &ES256Key,
         account_id: &AccountId,
         new_order: NewOrder,
+    ) -> Result<CreateResponse<Order>>;
+
+    async fn get_order(
+        &mut self,
+        key: &ES256Key,
+        account_id: &AccountId,
+        order_url: &str,
     ) -> Result<Order>;
 
     async fn finalize_order(
         &mut self,
         key: &ES256Key,
         account_id: &AccountId,
+        order: &Order,
         finalize_order: FinalizeOrder,
     ) -> Result<Order>;
 
@@ -249,6 +264,20 @@ pub trait AcmeBackend {
         account_id: &AccountId,
         order: &Order,
     ) -> Result<Vec<Authorization>>;
+
+    async fn respond_challenge(
+        &mut self,
+        key: &ES256Key,
+        account_id: &AccountId,
+        challenge: &Challenge,
+    ) -> Result<()>;
+
+    async fn download_certificate(
+        &mut self,
+        key: &ES256Key,
+        account_id: &AccountId,
+        order_url: &str,
+    ) -> Result<String>;
 }
 
 pub struct ReqwestAcmeBackend {
@@ -342,7 +371,7 @@ impl AcmeBackend for ReqwestAcmeBackend {
         key: &ES256Key,
         account_id: &AccountId,
         new_order: NewOrder,
-    ) -> Result<Order> {
+    ) -> Result<CreateResponse<Order>> {
         let payload = Jose::sign(
             &key,
             Some(account_id),
@@ -361,6 +390,48 @@ impl AcmeBackend for ReqwestAcmeBackend {
 
         ensure!(
             res.status() == reqwest::StatusCode::CREATED,
+            "unexpected status code: {}\n{}",
+            res.status(),
+            res.text().await?,
+        );
+
+        self.nonce = res
+            .headers()
+            .get("replay-nonce")
+            .ok_or_else(|| anyhow!("couldn't get the new nonce"))?
+            .to_str()?
+            .to_owned();
+
+        let url = res
+            .headers()
+            .get("location")
+            .ok_or_else(|| anyhow!("couldn't get the order's location"))?
+            .to_str()?
+            .to_owned();
+
+        let order: Order = res.json().await?;
+
+        Ok(CreateResponse { url, body: order })
+    }
+
+    async fn get_order(
+        &mut self,
+        key: &ES256Key,
+        account_id: &AccountId,
+        order_url: &str,
+    ) -> Result<Order> {
+        let payload = Jose::sign_empty(&key, Some(account_id), &self.nonce, &order_url)?;
+
+        let res = self
+            .client
+            .post(order_url)
+            .header(reqwest::header::CONTENT_TYPE, "application/jose+json")
+            .body(serde_json::to_vec(&payload)?)
+            .send()
+            .await?;
+
+        ensure!(
+            res.status() == reqwest::StatusCode::OK,
             "unexpected status code: {}\n{}",
             res.status(),
             res.text().await?,
@@ -423,9 +494,119 @@ impl AcmeBackend for ReqwestAcmeBackend {
         &mut self,
         key: &ES256Key,
         account_id: &AccountId,
+        order: &Order,
         finalize_order: FinalizeOrder,
     ) -> Result<Order> {
-        todo!();
+        let payload = Jose::sign(
+            &key,
+            Some(account_id),
+            &self.nonce,
+            &order.finalize,
+            finalize_order,
+        )?;
+
+        let res = self
+            .client
+            .post(&order.finalize)
+            .header(reqwest::header::CONTENT_TYPE, "application/jose+json")
+            .body(serde_json::to_vec(&payload)?)
+            .send()
+            .await?;
+
+        ensure!(
+            res.status() == reqwest::StatusCode::OK,
+            "unexpected status code: {}\n{}",
+            res.status(),
+            res.text().await?,
+        );
+
+        self.nonce = res
+            .headers()
+            .get("replay-nonce")
+            .ok_or_else(|| anyhow!("couldn't get the new nonce"))?
+            .to_str()?
+            .to_owned();
+
+        let order: Order = res.json().await?;
+
+        Ok(order)
+    }
+
+    async fn respond_challenge(
+        &mut self,
+        key: &ES256Key,
+        account_id: &AccountId,
+        challenge: &Challenge,
+    ) -> Result<()> {
+        #[derive(Clone, Debug, serde::Deserialize, serde::Serialize)]
+        struct RespondChallenge {}
+
+        let payload = Jose::sign(
+            &key,
+            Some(account_id),
+            &self.nonce,
+            &challenge.url,
+            RespondChallenge {},
+        )?;
+
+        let res = self
+            .client
+            .post(&challenge.url)
+            .header(reqwest::header::CONTENT_TYPE, "application/jose+json")
+            .body(serde_json::to_vec(&payload)?)
+            .send()
+            .await?;
+
+        ensure!(
+            res.status() == reqwest::StatusCode::OK,
+            "unexpected status code: {}\n{}",
+            res.status(),
+            res.text().await?,
+        );
+
+        self.nonce = res
+            .headers()
+            .get("replay-nonce")
+            .ok_or_else(|| anyhow!("couldn't get the new nonce"))?
+            .to_str()?
+            .to_owned();
+
+        Ok(())
+    }
+
+    async fn download_certificate(
+        &mut self,
+        key: &ES256Key,
+        account_id: &AccountId,
+        certificate_url: &str,
+    ) -> Result<String> {
+        let payload = Jose::sign_empty(&key, Some(account_id), &self.nonce, certificate_url)?;
+
+        let res = self
+            .client
+            .post(certificate_url)
+            .header(reqwest::header::CONTENT_TYPE, "application/jose+json")
+            .body(serde_json::to_vec(&payload)?)
+            .send()
+            .await?;
+
+        ensure!(
+            res.status() == reqwest::StatusCode::OK,
+            "unexpected status code: {}\n{}",
+            res.status(),
+            res.text().await?,
+        );
+
+        self.nonce = res
+            .headers()
+            .get("replay-nonce")
+            .ok_or_else(|| anyhow!("couldn't get the new nonce"))?
+            .to_str()?
+            .to_owned();
+
+        let certificate = res.text().await?;
+
+        Ok(certificate)
     }
 }
 
@@ -438,4 +619,22 @@ pub async fn new_account(
     let (account_id, account) = backend.new_account(&key, new_account).await?;
 
     Ok((key, account_id, account))
+}
+
+pub fn parse_key(private_key: &str) -> Result<ES256Key> {
+    let private_key = base64::decode_config(private_key, base64::URL_SAFE_NO_PAD)?;
+    let private_key = ES256Key::from_sec1_der(&private_key)?;
+    Ok(private_key)
+}
+
+pub fn key_authorization(key: &ES256Key, token: &str) -> String {
+    let jwk = key.to_jwk_string();
+
+    let mut hasher = Sha256::new();
+    hasher.update(jwk.as_bytes());
+
+    let thumbprint = hasher.finalize();
+    let thumbprint = base64::encode_config(thumbprint, base64::URL_SAFE_NO_PAD);
+
+    format!("{token}.{thumbprint}")
 }

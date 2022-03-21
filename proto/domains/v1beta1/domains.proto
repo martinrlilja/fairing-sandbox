@@ -5,6 +5,8 @@ package fairing.domains.v1beta1;
 service Domains {
   // Create a domain in a team.
   rpc CreateDomain(CreateDomainRequest) returns (Domain);
+
+  rpc SetDomainSite(SetDomainSiteRequest) returns (SetDomainSiteResponse);
 }
 
 message Domain {
@@ -16,4 +18,12 @@ message Domain {
 message CreateDomainRequest {
   string resource_id = 1;
   string parent = 2;
+}
+
+message SetDomainSiteRequest {
+  string name = 1;
+  string site = 2;
+}
+
+message SetDomainSiteResponse {
 }

@@ -691,56 +691,28 @@ impl database::DeploymentRepository for PostgresDatabase {
         &self,
         lookup: &models::DeploymentHostLookup,
     ) -> Result<Option<Vec<models::DeploymentProjectionAsdf>>> {
-        let tail_labels = lookup.tail_labels();
+        tracing::trace!("{lookup:?} {}", lookup.host());
 
-        // TODO: turn this into a setting.
-        if tail_labels == Some("localhost") {
-            if let (Some(site), Some(deployment)) = (lookup.site(), lookup.deployment()) {
-                let projections = sqlx::query_as(
-                    r"
-                    SELECT t.file_keyspace_id, dp.layer_set_id, dp.layer_id, dp.mount_path, dp.sub_path
-                    FROM deployment_projections dp
-                    JOIN deployments d
-                        ON d.id = dp.deployment_id
-                    JOIN sites s
-                        ON s.id = d.site_id
-                    JOIN teams t
-                        ON t.id = s.team_id
-                    WHERE s.name = $1 AND d.name = $2;
-                    ",
-                )
-                .bind(site)
-                .bind(deployment)
-                .fetch_all(&self.pool)
-                .await?;
+        let projections = sqlx::query_as(
+            r"
+            SELECT t.file_keyspace_id, dp.layer_set_id, dp.layer_id, dp.mount_path, dp.sub_path
+            FROM deployment_projections dp
+            JOIN deployments d
+                ON d.id = dp.deployment_id
+            JOIN sites s
+                ON s.id = d.site_id
+            JOIN domains domain
+                ON domain.team_id = s.team_id AND domain.site_id = s.id
+            JOIN teams t
+                ON t.id = s.team_id
+            WHERE domain.name = $1 AND domain.is_validated = true;
+            ",
+        )
+        .bind(lookup.host())
+        .fetch_all(&self.pool)
+        .await?;
 
-                Ok(Some(projections))
-            } else if let Some(site) = lookup.site() {
-                let projections = sqlx::query_as(
-                    r"
-                    SELECT t.file_keyspace_id, dp.layer_set_id, dp.layer_id, dp.mount_path, dp.sub_path
-                    FROM deployment_projections dp
-                    JOIN deployments d
-                        ON d.id = dp.deployment_id
-                    JOIN sites s
-                        ON s.current_deployment_id = d.id
-                    JOIN teams t
-                        ON t.id = s.team_id
-                    WHERE s.name = $1;
-                    ",
-                )
-                .bind(site)
-                .fetch_all(&self.pool)
-                .await?;
-
-                Ok(Some(projections))
-            } else {
-                Ok(None)
-            }
-        } else {
-            // TODO: lookup registered domains
-            Ok(None)
-        }
+        Ok(Some(projections))
     }
 }
 
@@ -771,11 +743,102 @@ impl database::DomainRepository for PostgresDatabase {
         Ok(domain)
     }
 
+    async fn set_domain_site(
+        &self,
+        domain: &models::DomainName,
+        site: &models::SiteName,
+    ) -> Result<()> {
+        ensure!(
+            domain.parent().resource() == site.parent().resource(),
+            "domain and site must be in the same team"
+        );
+
+        sqlx::query(
+            r"
+            UPDATE domains domain
+            SET site_id = s.id
+            FROM sites s
+            JOIN teams t
+                ON t.id = s.team_id
+            WHERE t.name = $1 AND s.name = $2 AND domain.name = $3;
+            ",
+        )
+        .bind(site.parent().resource())
+        .bind(site.resource())
+        .bind(domain.resource())
+        .execute(&self.pool)
+        .await
+        .context("set domain site")?;
+
+        Ok(())
+    }
+
     async fn create_certificate(
         &self,
-        _certificate: &models::CreateCertificate,
+        certificate: &models::CreateCertificate,
     ) -> Result<models::Certificate> {
-        todo!();
+        let (domain_name, certificate) = certificate.create()?;
+        let certificate_id = Uuid::new_v4();
+
+        let mut tx = self.pool.begin().await?;
+
+        sqlx::query(
+            r"
+            INSERT INTO certificates (id, team_id, domain_id, created_time, expires_time, private_key, public_key_chain)
+            SELECT $1, t.id, d.id, $2, $3, $4, $5
+            FROM domains d
+            JOIN teams t
+                ON t.id = d.team_id
+            WHERE t.name = $6 AND d.name = $7;
+            ",
+        )
+        .bind(&certificate_id)
+        .bind(&certificate.created_time)
+        .bind(&certificate.expires_time)
+        .bind(&certificate.private_key)
+        .bind(&certificate.public_key_chain)
+        .bind(domain_name.parent().resource())
+        .bind(domain_name.resource())
+        .execute(&mut tx)
+        .await
+        .context("create certificate")?;
+
+        sqlx::query(
+            r"
+            UPDATE domains d
+            SET is_validated = (t.name = $1)
+            FROM teams t
+            WHERE t.id = d.team_id AND d.name = $2;
+            ",
+        )
+        .bind(domain_name.parent().resource())
+        .bind(domain_name.resource())
+        .execute(&mut tx)
+        .await
+        .context("validate and invalidate domains")?;
+
+        tx.commit().await?;
+
+        Ok(certificate)
+    }
+
+    async fn get_certificate(&self, domain: &str) -> Result<Option<models::Certificate>> {
+        let certificate = sqlx::query_as(
+            r"
+            SELECT c.created_time, c.expires_time, c.private_key, c.public_key_chain
+            FROM certificates c
+            JOIN domains d
+                ON d.team_id = c.team_id AND d.id = c.domain_id
+            WHERE d.name = $1 AND d.is_validated = true
+            LIMIT 1;
+            ",
+        )
+        .bind(domain)
+        .fetch_optional(&self.pool)
+        .await
+        .context("getting certificate")?;
+
+        Ok(certificate)
     }
 
     async fn create_acme_order(&self, acme_order: &models::CreateAcmeOrder) -> Result<()> {
@@ -805,16 +868,16 @@ impl database::DomainRepository for PostgresDatabase {
         for challenge in challenges {
             let challenge_id = Uuid::new_v4();
 
-            sqlx::query(
+            let res = sqlx::query(
                 r"
                 INSERT INTO acme_challenges (id, team_id, acme_order_id, domain_id, dns_01_token)
-                SELECT $1, t.id, ao.id, s.id, $2
+                SELECT $1, t.id, ao.id, domain.id, $2
                 FROM acme_orders ao
                 JOIN teams t
                     ON t.id = ao.team_id
-                JOIN sites s
-                    ON s.team_id = t.id
-                WHERE ao.id = $3
+                JOIN domains domain
+                    ON domain.team_id = t.id
+                WHERE ao.id = $3 AND domain.name = $4;
                 ",
             )
             .bind(&challenge_id)
@@ -824,6 +887,8 @@ impl database::DomainRepository for PostgresDatabase {
             .execute(&mut tx)
             .await
             .context("create acme challenge")?;
+
+            ensure!(res.rows_affected() == 1, "wrong number of acme challenges created {:?}", res);
         }
 
         tx.commit().await?;
@@ -846,7 +911,9 @@ impl database::DomainRepository for PostgresDatabase {
                 ON d.id = ac.domain_id
             JOIN teams t
                 ON t.id = ac.team_id
-            WHERE d.acme_label = $1;
+            WHERE d.acme_label = $1 AND ao.expires_time > NOW()
+            ORDER BY ao.created_time DESC
+            LIMIT 1;
             ",
         )
         .bind(acme_label)
@@ -855,6 +922,31 @@ impl database::DomainRepository for PostgresDatabase {
         .context("getting acme challenge")?;
 
         Ok(challenge)
+    }
+
+    async fn get_domain_needing_new_certificate(&self) -> Result<Option<models::Domain>> {
+        let domain = sqlx::query_as(
+            r"
+            SELECT 'teams/' || t.name || '/domains/' || d.name AS name,
+                    d.created_time, d.acme_label, d.is_validated
+            FROM domains d
+            LEFT JOIN certificates c
+                ON c.domain_id = d.id
+                    AND c.expires_time - (c.expires_time - c.created_time) / 3 > NOW()
+            LEFT JOIN acme_challenges ac
+                ON ac.domain_id = d.id
+            LEFT JOIN acme_orders ao
+                ON ao.id = ac.acme_order_id AND NOW() - ao.expires_time > interval '1 hour'
+            JOIN teams t
+                ON t.id = d.team_id
+            WHERE c.id IS NULL AND ao.id IS NULL;
+            ",
+        )
+        .fetch_optional(&self.pool)
+        .await
+        .context("getting domain needing new certificate")?;
+
+        Ok(domain)
     }
 }
 

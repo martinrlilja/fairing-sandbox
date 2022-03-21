@@ -93,6 +93,17 @@ async fn main() -> Result<()> {
                                 .help("Domain name that you want to add to your team."),
                         )
                 )
+                .subcommand(
+                    SubCommand::with_name("attach")
+                    .about("Attach a domain to a site")
+                    .arg(Arg::with_name("domain")
+                                .help("Domain to attach the site to. Format: teams/<team>/domains/<domain>"),
+                        )
+                        .arg(
+                            Arg::with_name("site-name")
+                                .help("Site that you want to attach to your domain."),
+                        )
+                )
         )
         .get_matches();
 
@@ -359,7 +370,9 @@ async fn command_sources(matches: &ArgMatches<'_>) -> Result<()> {
 }
 
 async fn command_domains(matches: &ArgMatches<'_>) -> Result<()> {
-    use fairing_proto::domains::v1beta1::{domains_client::DomainsClient, CreateDomainRequest};
+    use fairing_proto::domains::v1beta1::{
+        domains_client::DomainsClient, CreateDomainRequest, SetDomainSiteRequest,
+    };
 
     let channel = Channel::from_static("http://api.localhost:8080")
         .connect()
@@ -382,6 +395,20 @@ async fn command_domains(matches: &ArgMatches<'_>) -> Result<()> {
             .await?;
 
         println!("Created domain: {}", response.get_ref().name);
+    } else if let Some(matches) = matches.subcommand_matches("attach") {
+        let domain_name = matches.value_of("domain").expect("domain name must be set");
+        let site_name = matches
+            .value_of("site-name")
+            .expect("site name must be set");
+
+        domains_client
+            .set_domain_site(SetDomainSiteRequest {
+                name: domain_name.into(),
+                site: site_name.into(),
+            })
+            .await?;
+
+        println!("Attached domain");
     }
 
     Ok(())

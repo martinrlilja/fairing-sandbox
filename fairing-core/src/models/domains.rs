@@ -19,7 +19,7 @@ impl<'n> ParentedResourceName<'n> for DomainName<'n> {
     type Parent = crate::models::TeamName<'static>;
 }
 
-#[derive(sqlx::FromRow)]
+#[derive(Clone, Debug, sqlx::FromRow)]
 pub struct Domain {
     pub name: DomainName<'static>,
     pub created_time: DateTime<Utc>,

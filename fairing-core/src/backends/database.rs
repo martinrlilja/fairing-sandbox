@@ -117,10 +117,18 @@ pub trait DeploymentRepository: Send + Sync {
 pub trait DomainRepository: Send + Sync {
     async fn create_domain(&self, domain: &models::CreateDomain) -> Result<models::Domain>;
 
+    async fn set_domain_site(
+        &self,
+        domain: &models::DomainName,
+        site: &models::SiteName,
+    ) -> Result<()>;
+
     async fn create_certificate(
         &self,
         certificate: &models::CreateCertificate,
     ) -> Result<models::Certificate>;
+
+    async fn get_certificate(&self, domain: &str) -> Result<Option<models::Certificate>>;
 
     async fn create_acme_order(&self, acme_order: &models::CreateAcmeOrder) -> Result<()>;
 
@@ -128,6 +136,8 @@ pub trait DomainRepository: Send + Sync {
         &self,
         acme_label: &str,
     ) -> Result<Option<models::AcmeChallenge>>;
+
+    async fn get_domain_needing_new_certificate(&self) -> Result<Option<models::Domain>>;
 }
 
 #[async_trait::async_trait]

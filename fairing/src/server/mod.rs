@@ -33,36 +33,56 @@ pub async fn serve(
     database: Database,
     file_metadata: FileMetadata,
     file_storage: FileStorage,
-    http_addr: SocketAddr,
-    https_addr: SocketAddr,
+    http_addr: Vec<SocketAddr>,
+    https_redirect: bool,
+    https_redirect_port: Option<u16>,
+    https_addr: Vec<SocketAddr>,
 ) -> Result<()> {
     let certificate_resolver = certificate_resolver::CertificateResolver::new(database.clone());
 
-    let http_listener = TcpListener::bind(&http_addr).await?;
-    let https_listener = TcpListener::bind(&https_addr).await?;
+    let mut task_set = Vec::<tokio::task::JoinHandle<Result<()>>>::new();
 
-    let http_acceptor = hyper::server::conn::AddrIncoming::from_listener(http_listener)?;
+    for http_addr in http_addr {
+        let http_listener = TcpListener::bind(&http_addr).await?;
+        let http_acceptor = hyper::server::conn::AddrIncoming::from_listener(http_listener)?;
 
-    let incoming_tls_stream = certificate_resolver::accept(https_listener, certificate_resolver);
-
-    let https_acceptor = hyper::server::accept::from_stream(incoming_tls_stream);
-
-    let http = {
         let database = database.clone();
         let file_metadata = file_metadata.clone();
         let file_storage = file_storage.clone();
-        tokio::spawn(
-            async move { server(database, file_metadata, file_storage, http_acceptor).await },
-        )
-    };
 
-    let https =
-        tokio::spawn(
-            async move { server(database, file_metadata, file_storage, https_acceptor).await },
-        );
+        if https_redirect {
+            task_set.push(tokio::spawn(async move {
+                server_https_redirect(https_redirect_port, http_acceptor).await
+            }));
+        } else {
+            task_set.push(tokio::spawn(async move {
+                server(database, file_metadata, file_storage, http_acceptor).await
+            }));
+        }
 
-    http.await??;
-    https.await??;
+        tracing::info!("http listening on {http_addr}");
+    }
+
+    for https_addr in https_addr {
+        let https_listener = TcpListener::bind(&https_addr).await?;
+        let incoming_tls_stream =
+            certificate_resolver::accept(https_listener, certificate_resolver.clone());
+        let https_acceptor = hyper::server::accept::from_stream(incoming_tls_stream);
+
+        let database = database.clone();
+        let file_metadata = file_metadata.clone();
+        let file_storage = file_storage.clone();
+
+        task_set.push(tokio::spawn(async move {
+            server(database, file_metadata, file_storage, https_acceptor).await
+        }));
+
+        tracing::info!("https listening on {https_addr}");
+    }
+
+    for task in task_set {
+        task.await??;
+    }
 
     Ok(())
 }
@@ -114,7 +134,7 @@ where
     Server::builder(acceptor)
         .serve(make_service_fn(move |s: &Accept::Conn| {
             let remote_addr = s.remote_addr();
-            let _sni_hostname = s.sni_hostname();
+            let sni_hostname = s.sni_hostname().map(str::to_owned);
 
             let mut tonic = tonic.clone();
             let database = database.clone();
@@ -123,6 +143,8 @@ where
 
             future::ok::<_, Infallible>(tower::service_fn(
                 move |req: hyper::Request<hyper::Body>| {
+                    let sni_hostname = sni_hostname.clone();
+
                     let host = req.uri().host().or_else(|| {
                         req.headers()
                             .get(http::header::HOST)
@@ -130,14 +152,14 @@ where
                             .and_then(|host| host.split(':').next())
                     });
 
-                    /*
                     match (sni_hostname, host) {
-                        (Some(sni_hostname), Some(host)) if !sni_hostname.eq_ignore_ascii_case(host) => {
+                        (Some(sni_hostname), Some(host))
+                            if !sni_hostname.eq_ignore_ascii_case(host) =>
+                        {
                             tracing::error!("sni hostname does not match request host");
                         }
                         _ => (),
                     }
-                    */
 
                     let path = req.uri().path_and_query().map(|p| p.as_str());
 
@@ -168,6 +190,55 @@ where
                             .map_ok(|res| res.map(EitherBody::Right)),
                         ),
                     }
+                },
+            ))
+        }))
+        .await?;
+
+    Ok(())
+}
+
+async fn server_https_redirect<Accept>(
+    https_redirect_port: Option<u16>,
+    acceptor: Accept,
+) -> Result<()>
+where
+    Accept: hyper::server::accept::Accept,
+    Accept::Error: Into<Box<dyn std::error::Error + Send + Sync>>,
+    Accept::Conn:
+        ConnectionInfo + tokio::io::AsyncRead + tokio::io::AsyncWrite + Unpin + Send + 'static,
+{
+    Server::builder(acceptor)
+        .serve(make_service_fn(move |_| {
+            future::ok::<_, Infallible>(tower::service_fn(
+                move |req: hyper::Request<hyper::Body>| {
+                    let host = req
+                        .headers()
+                        .get(http::header::HOST)
+                        .and_then(|host| host.to_str().ok())
+                        .and_then(|host| host.split(':').next());
+
+                    // TODO: validate host before performing redirect.
+                    let res = if let Some(host) = host {
+                        let location = if let Some(https_redirect_port) = https_redirect_port {
+                            format!("https://{host}:{https_redirect_port}")
+                        } else {
+                            format!("https://{host}")
+                        };
+
+                        hyper::Response::builder()
+                            .status(hyper::StatusCode::PERMANENT_REDIRECT)
+                            .header(hyper::header::LOCATION, location)
+                            .body("".into())
+                            .map_err(anyhow::Error::from)
+                    } else {
+                        hyper::Response::builder()
+                            .status(hyper::StatusCode::BAD_REQUEST)
+                            .body("Bad request, missing host.".into())
+                            .map_err(anyhow::Error::from)
+                    };
+
+                    future::ready::<Result<hyper::Response<hyper::Body>>>(res)
                 },
             ))
         }))

@@ -14,25 +14,42 @@ use trust_dns_server::{
     server::RequestInfo,
 };
 
+use fairing_acme::ES256Key;
 use fairing_core::backends::Database;
 
-pub async fn serve(database: Database, addr: SocketAddr) -> Result<()> {
-    let udp_socket = UdpSocket::bind(addr).await?;
-    let tcp_listener = TcpListener::bind(addr).await?;
-
-    let zone = LowerName::from_str("acme.localhost")?;
+pub async fn serve(
+    database: Database,
+    zone: String,
+    udp_addr: Vec<SocketAddr>,
+    tcp_addr: Vec<SocketAddr>,
+    private_key: ES256Key,
+) -> Result<()> {
+    let zone = LowerName::from_str(&zone)?;
 
     let authority = Authority {
         origin: zone.base_name(),
         database,
+        private_key,
     };
 
     let mut catalog = Catalog::new();
     catalog.upsert(zone, Box::new(authority));
 
     let mut server = trust_dns_server::ServerFuture::new(catalog);
-    server.register_socket(udp_socket);
-    server.register_listener(tcp_listener, Duration::from_secs(30));
+
+    for udp_addr in udp_addr {
+        let udp_socket = UdpSocket::bind(udp_addr).await?;
+        server.register_socket(udp_socket);
+
+        tracing::info!("acme dns listening on udp {udp_addr}");
+    }
+
+    for tcp_addr in tcp_addr {
+        let tcp_listener = TcpListener::bind(tcp_addr).await?;
+        server.register_listener(tcp_listener, Duration::from_secs(30));
+
+        tracing::info!("acme dns listening on tcp {tcp_addr}");
+    }
 
     server.block_until_done().await?;
 
@@ -42,6 +59,7 @@ pub async fn serve(database: Database, addr: SocketAddr) -> Result<()> {
 struct Authority {
     origin: LowerName,
     database: Database,
+    private_key: ES256Key,
 }
 
 impl AuthorityObject for Authority {
@@ -49,6 +67,7 @@ impl AuthorityObject for Authority {
         Box::new(Authority {
             origin: self.origin.clone(),
             database: self.database.clone(),
+            private_key: self.private_key.clone(),
         })
     }
 
@@ -132,14 +151,15 @@ impl AuthorityObject for Authority {
                         None => return Ok(Box::new(AuthLookup::Empty) as Box<dyn LookupObject>),
                     };
 
-                    let token = challenge.dns_01_token;
+                    let key_authorization =
+                        fairing_acme::key_authorization(&self.private_key, &challenge.dns_01_token);
 
                     let mut records = RecordSet::with_ttl(
                         request_info.query.name().into(),
                         RecordType::TXT,
                         3600,
                     );
-                    records.add_rdata(RData::TXT(rdata::TXT::new(vec![token])));
+                    records.add_rdata(RData::TXT(rdata::TXT::new(vec![key_authorization])));
 
                     let answers = LookupRecords::Records {
                         lookup_options,

@@ -1,15 +1,8 @@
 use anyhow::{anyhow, Result};
 use fairing_core::backends::Database;
 use futures::Stream;
-use rustls::{
-    server::{Acceptor, ClientHello, ResolvesServerCert},
-    sign::CertifiedKey,
-};
-use std::{
-    collections::HashMap,
-    io,
-    sync::{Arc, Weak},
-};
+use rustls::server::Acceptor;
+use std::{collections::HashMap, io, sync::Arc};
 use tokio::{
     net::{TcpListener, TcpStream},
     sync::RwLock,
@@ -105,17 +98,34 @@ async fn accept_socket(
 
     drop(certificates);
 
+    let certificate = certificate_resolver
+        .database
+        .get_certificate(sni)
+        .await?
+        .ok_or_else(|| anyhow!("no certificate found"))?;
+
+    /*
     let hosts = vec![sni.into()];
 
     let cert = rcgen::generate_simple_self_signed(hosts)?;
 
     let public = rustls::Certificate(cert.serialize_der()?);
     let private = rustls::PrivateKey(cert.serialize_private_key_der());
+    */
+
+    let public_key_chain = certificate
+        .public_key_chain
+        .into_iter()
+        .map(|cert| rustls::Certificate(cert))
+        .collect();
 
     let mut tls_config = rustls::ServerConfig::builder()
         .with_safe_defaults()
         .with_no_client_auth()
-        .with_single_cert(vec![public], private)?;
+        .with_single_cert(
+            public_key_chain,
+            rustls::PrivateKey(certificate.private_key),
+        )?;
 
     tls_config.alpn_protocols = vec![b"h2".to_vec(), b"http/1.1".to_vec()];
 
