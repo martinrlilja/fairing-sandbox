@@ -691,8 +691,6 @@ impl database::DeploymentRepository for PostgresDatabase {
         &self,
         lookup: &models::DeploymentHostLookup,
     ) -> Result<Option<Vec<models::DeploymentProjectionAsdf>>> {
-        tracing::trace!("{lookup:?} {}", lookup.host());
-
         let projections = sqlx::query_as(
             r"
             SELECT t.file_keyspace_id, dp.layer_set_id, dp.layer_id, dp.mount_path, dp.sub_path
@@ -888,7 +886,11 @@ impl database::DomainRepository for PostgresDatabase {
             .await
             .context("create acme challenge")?;
 
-            ensure!(res.rows_affected() == 1, "wrong number of acme challenges created {:?}", res);
+            ensure!(
+                res.rows_affected() == 1,
+                "wrong number of acme challenges created {:?}",
+                res
+            );
         }
 
         tx.commit().await?;
@@ -902,7 +904,7 @@ impl database::DomainRepository for PostgresDatabase {
     ) -> Result<Option<models::AcmeChallenge>> {
         let challenge = sqlx::query_as(
             r"
-            SELECT 'teams/' || t.name || '/domains/' || d.name AS name,
+            SELECT 'teams/' || t.name || '/domains/' || d.name AS domain,
                     ac.dns_01_token
             FROM acme_challenges ac
             JOIN acme_orders ao
@@ -936,7 +938,7 @@ impl database::DomainRepository for PostgresDatabase {
             LEFT JOIN acme_challenges ac
                 ON ac.domain_id = d.id
             LEFT JOIN acme_orders ao
-                ON ao.id = ac.acme_order_id AND NOW() - ao.expires_time > interval '1 hour'
+                ON ao.id = ac.acme_order_id AND NOW() - ao.created_time < interval '5 minutes'
             JOIN teams t
                 ON t.id = d.team_id
             WHERE c.id IS NULL AND ao.id IS NULL;
