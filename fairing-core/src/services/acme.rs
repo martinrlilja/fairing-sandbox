@@ -44,7 +44,7 @@ impl AcmeService {
                 }
             }
 
-            tokio::time::sleep(Duration::from_secs(10)).await;
+            tokio::time::sleep(Duration::from_secs(30)).await;
         }
     }
 
@@ -100,7 +100,17 @@ impl AcmeService {
             }
         }
 
-        let certificate_params = rcgen::CertificateParams::new(vec![domain.name.resource().into()]);
+        let certificate_params = {
+            let mut certificate_params =
+                rcgen::CertificateParams::new(vec![domain.name.resource().into()]);
+            certificate_params.distinguished_name = rcgen::DistinguishedName::new();
+            certificate_params
+                .distinguished_name
+                .push(rcgen::DnType::CommonName, domain.name.resource());
+
+            certificate_params
+        };
+
         let certificate = rcgen::Certificate::from_params(certificate_params)?;
 
         let csr = certificate.serialize_request_der()?;
@@ -122,7 +132,7 @@ impl AcmeService {
         }
 
         if let OrderStatus::Invalid = order.status {
-            return Err(anyhow!("order is invalid"));
+            return Err(anyhow!("order is invalid: {:?}", order.error));
         }
 
         tracing::trace!("finalizing order");
@@ -180,7 +190,7 @@ impl AcmeService {
 
             tracing::trace!("certificate created");
         } else {
-            return Err(anyhow!("order is invalid"));
+            return Err(anyhow!("order is invalid: {:?}", order.error));
         }
 
         Ok(())
