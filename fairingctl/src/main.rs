@@ -395,6 +395,10 @@ async fn command_domains(matches: &ArgMatches<'_>) -> Result<()> {
             .await?;
 
         println!("Created domain: {}", response.get_ref().name);
+        println!(
+            "_acme-challenge.{domain_name} CNAME {}...",
+            response.get_ref().acme_label
+        );
     } else if let Some(matches) = matches.subcommand_matches("attach") {
         let domain_name = matches.value_of("domain").expect("domain name must be set");
         let site_name = matches
