@@ -1,6 +1,9 @@
 use anyhow::Result;
 use fairing_acme::AcmeBackend;
-use fairing_core::{models::{self, prelude::*}, services::{AcmeService, BuildServiceBuilder, Storage}};
+use fairing_core::{
+    models::{self, prelude::*},
+    services::{AcmeService, BuildServiceBuilder, Storage},
+};
 use std::net::SocketAddr;
 use tokio::task;
 use tracing_subscriber::prelude::*;
@@ -168,37 +171,61 @@ async fn main() -> Result<()> {
 
             let password = Alphanumeric.sample_string(&mut rand::thread_rng(), 32);
 
-            let res = database.create_user(&models::CreateUser {
-                resource_id: "fairing-admin",
-                password: &password,
-            }).await;
+            let res = database
+                .create_user(&models::CreateUser {
+                    resource_id: "fairing-admin",
+                    password: &password,
+                })
+                .await;
 
             match res {
                 Ok(user) => tracing::info!("created admin user {}", user.name.name()),
-                Err(err) => tracing::trace!("error creating admin user (probably safe to ignore): {err}"),
+                Err(err) => {
+                    tracing::trace!("error creating admin user (probably safe to ignore): {err}")
+                }
             }
 
-            let file_keyspace = file_metadata.create_file_keyspace(&models::CreateFileKeyspace).await?;
+            let file_keyspace = file_metadata
+                .create_file_keyspace(&models::CreateFileKeyspace)
+                .await?;
 
-            let res = database.create_team(&models::CreateTeam {
-                resource_id: "fairing-system",
-                user_name: models::UserName::parse("users/fairing-admin")?,
-                file_keyspace_id: file_keyspace.id,
-            }).await;
+            let res = database
+                .create_team(&models::CreateTeam {
+                    resource_id: "fairing-system",
+                    user_name: models::UserName::parse("users/fairing-admin")?,
+                    file_keyspace_id: file_keyspace.id,
+                })
+                .await;
 
             match res {
                 Ok(team) => tracing::info!("created system team {}", team.name.name()),
-                Err(err) => tracing::trace!("error creating admin user (probably safe to ignore): {err}"),
+                Err(err) => {
+                    tracing::trace!("error creating admin user (probably safe to ignore): {err}")
+                }
             }
 
-            let res = database.create_domain(&models::CreateDomain {
-                parent: models::TeamName::parse("teams/fairing-system")?,
-                resource_id: &config.api.host,
-            }).await;
+            let res = database
+                .create_domain(&models::CreateDomain {
+                    parent: models::TeamName::parse("teams/fairing-system")?,
+                    resource_id: &config.api.host,
+                })
+                .await;
 
             match res {
-                Ok(domain) => tracing::info!("created api domain {}", domain.name.name()),
-                Err(err) => tracing::trace!("error creating api domain (probably safe to ignore): {err}"),
+                Ok(domain) => {
+                    let AcmeDnsConfig::Server {
+                        zone: ref dns_zone, ..
+                    } = config.acme.dns;
+
+                    tracing::info!("created api domain {}", domain.name.name());
+                    tracing::info!(
+                        "add the following CNAME _acme-challenge = {}.{dns_zone}",
+                        domain.acme_label
+                    );
+                }
+                Err(err) => {
+                    tracing::trace!("error creating api domain (probably safe to ignore): {err}")
+                }
             }
         }
 
