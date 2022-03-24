@@ -151,14 +151,13 @@ impl AuthorityObject for Authority {
                         None => return Ok(Box::new(AuthLookup::Empty) as Box<dyn LookupObject>),
                     };
 
-                    let key_authorization =
-                        fairing_acme::key_authorization(&self.private_key, &challenge.dns_01_token);
-
-                    let mut records = RecordSet::with_ttl(
-                        request_info.query.name().into(),
-                        RecordType::TXT,
-                        3600,
+                    let key_authorization = fairing_acme::dns_key_authorization(
+                        &self.private_key,
+                        &challenge.dns_01_token,
                     );
+
+                    let mut records =
+                        RecordSet::with_ttl(request_info.query.name().into(), RecordType::TXT, 60);
                     records.add_rdata(RData::TXT(rdata::TXT::new(vec![key_authorization])));
 
                     let answers = LookupRecords::Records {
