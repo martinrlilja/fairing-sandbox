@@ -39,7 +39,8 @@ pub struct NewAccount {
 pub struct Account {
     pub status: String,
     pub contact: Vec<String>,
-    pub orders: String,
+    #[serde(default)]
+    pub orders: Option<String>,
 }
 
 #[derive(Copy, Clone, Debug, serde::Deserialize, serde::Serialize)]
@@ -61,6 +62,8 @@ pub struct NewOrder {
 pub struct Order {
     pub status: OrderStatus,
     pub expires: String,
+    #[serde(default)]
+    pub error: Option<serde_json::Value>,
     pub authorizations: Vec<String>,
     pub finalize: String,
     #[serde(default)]
@@ -628,7 +631,14 @@ pub fn parse_key(private_key: &str) -> Result<ES256Key> {
 }
 
 pub fn key_authorization(key: &ES256Key, token: &str) -> String {
-    let jwk = key.to_jwk_string();
+    use std::collections::BTreeMap;
+
+    // We only need the public key.
+    let jwk = key.public_key().to_jwk_string();
+
+    // Sort all the keys before hashing according to RFC7638.
+    let jwk: BTreeMap<String, String> = serde_json::from_str(&jwk).unwrap();
+    let jwk = serde_json::to_string(&jwk).unwrap();
 
     let mut hasher = Sha256::new();
     hasher.update(jwk.as_bytes());
@@ -637,4 +647,14 @@ pub fn key_authorization(key: &ES256Key, token: &str) -> String {
     let thumbprint = base64::encode_config(thumbprint, base64::URL_SAFE_NO_PAD);
 
     format!("{token}.{thumbprint}")
+}
+
+pub fn dns_key_authorization(key: &ES256Key, token: &str) -> String {
+    let key_authorization = key_authorization(key, token);
+
+    let mut hasher = Sha256::new();
+    hasher.update(key_authorization.as_bytes());
+
+    let dns_key_authorization = hasher.finalize();
+    base64::encode_config(dns_key_authorization, base64::URL_SAFE_NO_PAD)
 }
