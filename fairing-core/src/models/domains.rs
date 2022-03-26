@@ -105,7 +105,6 @@ impl From<fairing_acme::OrderStatus> for AcmeOrderStatus {
 pub struct AcmeOrder {
     pub status: AcmeOrderStatus,
     pub created_time: DateTime<Utc>,
-    pub expires_time: DateTime<Utc>,
     pub url: String,
 }
 
@@ -117,7 +116,6 @@ pub struct AcmeChallenge {
 
 pub struct CreateAcmeOrder {
     pub parent: models::TeamName<'static>,
-    pub order_url: String,
     pub order: fairing_acme::Order,
     pub authorizations: Vec<fairing_acme::Authorization>,
 }
@@ -148,15 +146,12 @@ impl CreateAcmeOrder {
             })
             .collect::<Result<Vec<_>, _>>()?;
 
-        let expires_time = DateTime::parse_from_rfc3339(&self.order.expires)?.with_timezone(&Utc);
-
         Ok((
             self.parent.clone(),
             AcmeOrder {
                 status: self.order.status.into(),
                 created_time: Utc::now(),
-                expires_time,
-                url: self.order_url.clone(),
+                url: self.order.url.clone(),
             },
             challenges,
         ))

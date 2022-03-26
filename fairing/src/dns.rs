@@ -14,7 +14,7 @@ use trust_dns_server::{
     server::RequestInfo,
 };
 
-use fairing_acme::ES256Key;
+use fairing_acme::ES256PublicKey;
 use fairing_core::backends::Database;
 
 pub async fn serve(
@@ -22,14 +22,14 @@ pub async fn serve(
     zone: String,
     udp_addr: Vec<SocketAddr>,
     tcp_addr: Vec<SocketAddr>,
-    private_key: ES256Key,
+    public_key: ES256PublicKey,
 ) -> Result<()> {
     let zone = LowerName::from_str(&zone)?;
 
     let authority = Authority {
         origin: zone.base_name(),
         database,
-        private_key,
+        public_key,
     };
 
     let mut catalog = Catalog::new();
@@ -59,7 +59,7 @@ pub async fn serve(
 struct Authority {
     origin: LowerName,
     database: Database,
-    private_key: ES256Key,
+    public_key: ES256PublicKey,
 }
 
 impl AuthorityObject for Authority {
@@ -67,7 +67,7 @@ impl AuthorityObject for Authority {
         Box::new(Authority {
             origin: self.origin.clone(),
             database: self.database.clone(),
-            private_key: self.private_key.clone(),
+            public_key: self.public_key.clone(),
         })
     }
 
@@ -151,10 +151,9 @@ impl AuthorityObject for Authority {
                         None => return Ok(Box::new(AuthLookup::Empty) as Box<dyn LookupObject>),
                     };
 
-                    let key_authorization = fairing_acme::dns_key_authorization(
-                        &self.private_key,
-                        &challenge.dns_01_token,
-                    );
+                    let key_authorization = self
+                        .public_key
+                        .dns_key_authorization(&challenge.dns_01_token);
 
                     let mut records =
                         RecordSet::with_ttl(request_info.query.name().into(), RecordType::TXT, 60);

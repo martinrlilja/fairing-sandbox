@@ -205,7 +205,6 @@ CREATE TABLE acme_orders (
     team_id UUID REFERENCES teams (id) ON DELETE CASCADE NOT NULL,
 
     created_time TIMESTAMPTZ NOT NULL,
-    expires_time TIMESTAMPTZ NOT NULL,
 
     status acme_order_status NOT NULL,
     url TEXT NOT NULL,

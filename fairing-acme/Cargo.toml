@@ -9,6 +9,7 @@ edition = "2021"
 anyhow = "1"
 async-trait = "0.1"
 base64 = "0.13"
+http = "0.2"
 p256 = { version = "0.10", features = ["jwk", "ecdsa"] }
 rand_core = { version = "0.6", features = ["getrandom"] }
 reqwest = { version = "0.11", features = ["json"] }

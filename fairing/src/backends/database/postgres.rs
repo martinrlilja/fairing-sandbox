@@ -847,15 +847,14 @@ impl database::DomainRepository for PostgresDatabase {
 
         sqlx::query(
             r"
-            INSERT INTO acme_orders (id, team_id, created_time, expires_time, status, url)
-            SELECT $1, t.id, $2, $3, $4, $5
+            INSERT INTO acme_orders (id, team_id, created_time, status, url)
+            SELECT $1, t.id, $2, $3, $4
             FROM teams t
-            WHERE t.name = $6;
+            WHERE t.name = $5;
             ",
         )
         .bind(&order_id)
         .bind(&order.created_time)
-        .bind(&order.expires_time)
         .bind(order.status)
         .bind(&order.url)
         .bind(team_name.resource())
@@ -913,7 +912,7 @@ impl database::DomainRepository for PostgresDatabase {
                 ON d.id = ac.domain_id
             JOIN teams t
                 ON t.id = ac.team_id
-            WHERE d.acme_label = $1 AND ao.expires_time > NOW()
+            WHERE d.acme_label = $1
             ORDER BY ao.created_time DESC
             LIMIT 1;
             ",

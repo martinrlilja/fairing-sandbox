@@ -1,4 +1,4 @@
-use anyhow::{anyhow, Result};
+use anyhow::{anyhow, Context as _, Result};
 use chrono::{TimeZone, Utc};
 use std::time::Duration;
 use x509_parser::prelude::*;
@@ -8,30 +8,18 @@ use crate::{
     models::{self, prelude::*},
 };
 use fairing_acme::{
-    AccountId, AcmeBackend, AuthorizationStatus, ES256Key, FinalizeOrder, Identifier,
-    IdentifierType, NewOrder, OrderStatus,
+    AcmeClientBackend, AcmeClientWithAccount, AuthorizationStatus, CreateOrder, FinalizeOrder,
+    Identifier, IdentifierType, OrderStatus,
 };
 
-pub struct AcmeService {
+pub struct AcmeService<Backend> {
     database: Database,
-    client: Box<dyn AcmeBackend + Send>,
-    key: ES256Key,
-    account_id: AccountId,
+    client: AcmeClientWithAccount<Backend>,
 }
 
-impl AcmeService {
-    pub fn new(
-        database: Database,
-        client: Box<dyn AcmeBackend + Send>,
-        key: ES256Key,
-        account_id: AccountId,
-    ) -> AcmeService {
-        AcmeService {
-            database,
-            client,
-            key,
-            account_id,
-        }
+impl<Backend: AcmeClientBackend + Send> AcmeService<Backend> {
+    pub fn new(database: Database, client: AcmeClientWithAccount<Backend>) -> AcmeService<Backend> {
+        AcmeService { database, client }
     }
 
     pub async fn run(mut self) -> Result<()> {
@@ -54,30 +42,30 @@ impl AcmeService {
 
         let order = self
             .client
-            .new_order(
-                &self.key,
-                &self.account_id,
-                NewOrder {
-                    identifiers: vec![Identifier {
-                        type_: IdentifierType::Dns,
-                        value: domain.name.resource().into(),
-                    }],
-                },
-            )
-            .await?;
+            .create_order(&CreateOrder {
+                identifiers: vec![Identifier {
+                    type_: IdentifierType::Dns,
+                    value: domain.name.resource().into(),
+                }],
+            })
+            .await
+            .context("create order")?;
 
-        let authorizations = self
-            .client
-            .get_authorizations(&self.key, &self.account_id, &order.body)
-            .await?;
+        let mut authorizations = vec![];
 
-        let order_url = order.url;
+        for authorization_url in order.authorizations.iter() {
+            let authorization = self
+                .client
+                .get_authorization(&authorization_url)
+                .await
+                .context("get authorization")?;
+            authorizations.push(authorization);
+        }
 
         self.database
             .create_acme_order(&models::CreateAcmeOrder {
                 parent: domain.name.parent(),
-                order_url: order_url.clone(),
-                order: order.body.clone(),
+                order: order.clone(),
                 authorizations: authorizations.clone(),
             })
             .await?;
@@ -95,8 +83,9 @@ impl AcmeService {
             if let Some(dns_challenge) = dns_challenge {
                 tracing::trace!("responding to dns-01 challenge");
                 self.client
-                    .respond_challenge(&self.key, &self.account_id, &dns_challenge)
-                    .await?;
+                    .accept_challenge(&dns_challenge.url)
+                    .await
+                    .context("accept challenge")?;
             }
         }
 
@@ -117,18 +106,12 @@ impl AcmeService {
 
         tracing::trace!("waiting for order to not be pending");
 
-        let mut order = self
-            .client
-            .get_order(&self.key, &self.account_id, &order_url)
-            .await?;
+        let mut order = self.client.get_order(&order.url).await.context("get order")?;
 
         while let OrderStatus::Pending = order.status {
             tokio::time::sleep(Duration::from_secs(10)).await;
 
-            order = self
-                .client
-                .get_order(&self.key, &self.account_id, &order_url)
-                .await?;
+            order = self.client.get_order(&order.url).await.context("get order")?;
         }
 
         if let OrderStatus::Invalid = order.status {
@@ -140,14 +123,13 @@ impl AcmeService {
         let mut order = self
             .client
             .finalize_order(
-                &self.key,
-                &self.account_id,
-                &order,
-                FinalizeOrder {
+                &order.finalize,
+                &FinalizeOrder {
                     csr: base64::encode_config(&csr, base64::URL_SAFE_NO_PAD),
                 },
             )
-            .await?;
+            .await
+            .context("finalize order")?;
 
         tracing::trace!("waiting for certificate to be ready");
 
@@ -156,8 +138,10 @@ impl AcmeService {
 
             order = self
                 .client
-                .get_order(&self.key, &self.account_id, &order_url)
-                .await?;
+                .get_order(&order.url)
+                .await
+                .context("get order")
+                .context("get order")?;
         }
 
         if let Some(certificate_url) = order.certificate {
@@ -165,8 +149,9 @@ impl AcmeService {
 
             let acme_certificate = self
                 .client
-                .download_certificate(&self.key, &self.account_id, &certificate_url)
-                .await?;
+                .download_certificate(&certificate_url)
+                .await
+                .context("download certificate")?;
 
             let public_key_chain = rustls_pemfile::read_all(&mut acme_certificate.as_bytes())?
                 .into_iter()

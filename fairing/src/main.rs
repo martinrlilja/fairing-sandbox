@@ -1,5 +1,4 @@
 use anyhow::Result;
-use fairing_acme::AcmeBackend;
 use fairing_core::{
     models::{self, prelude::*},
     services::{AcmeService, BuildServiceBuilder, Storage},
@@ -62,8 +61,10 @@ enum DatabaseConfig {
 #[derive(Debug, serde::Deserialize)]
 struct AcmeConfig {
     server: String,
-    private_key: Option<String>,
-    account_id: Option<String>,
+    secret_key: Option<String>,
+    secret_key_id: Option<String>,
+    #[serde(default)]
+    danger_accept_invalid_certs: bool,
     dns: AcmeDnsConfig,
 }
 
@@ -246,8 +247,8 @@ async fn main() -> Result<()> {
 
         tracing::info!("starting server");
 
-        if let (Some(private_key), Some(account_id)) =
-            (config.acme.private_key, config.acme.account_id)
+        if let (Some(secret_key), Some(secret_key_id)) =
+            (config.acme.secret_key, config.acme.secret_key_id)
         {
             let AcmeDnsConfig::Server {
                 udp_bind: dns_udp_addr,
@@ -255,14 +256,14 @@ async fn main() -> Result<()> {
                 zone: dns_zone,
             } = config.acme.dns;
 
-            let private_key = fairing_acme::parse_key(&private_key)?;
+            let secret_key = fairing_acme::ES256SecretKey::parse_key(&secret_key)?;
 
             let dns_server = dns::serve(
                 database.database(),
                 dns_zone,
                 dns_udp_addr,
                 dns_tcp_addr,
-                private_key.clone(),
+                secret_key.public_key(),
             );
 
             tokio::spawn(async move {
@@ -272,14 +273,17 @@ async fn main() -> Result<()> {
                 }
             });
 
-            let backend = fairing_acme::ReqwestAcmeBackend::connect(&config.acme.server).await?;
+            let http_client = reqwest::Client::builder()
+                .https_only(true)
+                .danger_accept_invalid_certs(config.acme.danger_accept_invalid_certs)
+                .timeout(std::time::Duration::from_secs(30))
+                .build()?;
 
-            let acme_service = AcmeService::new(
-                database.database(),
-                Box::new(backend),
-                private_key,
-                fairing_acme::AccountId(account_id),
-            );
+            let client = fairing_acme::AcmeClient::connect(http_client, &config.acme.server)
+                .await?
+                .with_account(secret_key, &secret_key_id)?;
+
+            let acme_service = AcmeService::new(database.database(), client);
 
             tokio::spawn(async move {
                 let res = acme_service.run().await;
@@ -312,37 +316,42 @@ async fn main() -> Result<()> {
             .map(|mail| format!("mailto:{mail}"))
             .collect::<Vec<_>>();
 
-        let mut backend = fairing_acme::ReqwestAcmeBackend::connect(&config.acme.server).await?;
+        let http_client = reqwest::Client::builder()
+            .https_only(true)
+            .danger_accept_invalid_certs(config.acme.danger_accept_invalid_certs)
+            .timeout(std::time::Duration::from_secs(30))
+            .build()?;
 
-        if !accept_terms_of_service {
-            let meta = backend.meta();
+        let client = fairing_acme::AcmeClient::connect(http_client, &config.acme.server).await?;
 
-            println!(
-                "Rerun this command with --accept-terms-of-service to accept the terms of service below."
-            );
-            println!("{}", meta.terms_of_service);
-        } else {
-            let (key, account_id, _account) = fairing_acme::new_account(
-                &mut backend,
-                fairing_acme::NewAccount {
-                    terms_of_service_agreed: accept_terms_of_service,
-                    contact,
-                },
-            )
-            .await?;
+        match client.meta().terms_of_service {
+            Some(ref terms_of_service) if !accept_terms_of_service => {
+                println!(
+                    "Rerun this command with --accept-terms-of-service to accept the terms of service below."
+                );
+                println!("{}", terms_of_service);
+            }
+            _ => {
+                let client = client
+                    .create_account(&fairing_acme::CreateAccount {
+                        terms_of_service_agreed: accept_terms_of_service,
+                        contact,
+                    })
+                    .await?;
 
-            let encoded_key =
-                base64::encode_config(&*key.to_sec1_der().unwrap(), base64::URL_SAFE_NO_PAD);
-            let fairing_acme::AccountId(account_id) = account_id;
-            let server = config.acme.server;
+                let secret_key = client.secret_key().to_string()?;
+                let secret_key_id = client.secret_key_id();
 
-            println!("Add the following to your configuration.");
-            println!();
+                let server = config.acme.server;
 
-            println!("[acme]");
-            println!("server = \"{server}\"");
-            println!("private_key = \"{encoded_key}\"");
-            println!("account_id = \"{account_id}\"");
+                println!("Add the following to your configuration.");
+                println!();
+
+                println!("[acme]");
+                println!("server = \"{server}\"");
+                println!("secret_key = \"{secret_key}\"");
+                println!("secret_key_id = \"{secret_key_id}\"");
+            }
         }
     }
 
