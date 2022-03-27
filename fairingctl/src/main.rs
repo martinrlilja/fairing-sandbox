@@ -2,7 +2,7 @@ use anyhow::{anyhow, Result};
 use clap::{crate_version, App, AppSettings, Arg, ArgMatches, SubCommand};
 use tonic::{
     metadata::{AsciiMetadataValue, MetadataValue},
-    transport::Channel,
+    transport::{Channel, ClientTlsConfig},
     Request,
 };
 
@@ -14,6 +14,7 @@ async fn main() -> Result<()> {
         .version(crate_version!())
         .about("CLI for WebAssembly powered static sites.")
         .setting(AppSettings::SubcommandRequiredElseHelp)
+        .arg(Arg::with_name("host").env("FAIRING_HOST").long("host").short("H").takes_value(true))
         .subcommand(
             SubCommand::with_name("users")
                 .about("Manage users")
@@ -113,22 +114,32 @@ async fn main() -> Result<()> {
 
     tracing::subscriber::set_global_default(subscriber).expect("setting default subscriber failed");
 
+    let host = matches
+        .value_of("host")
+        .unwrap_or("http://api.localhost:8080")
+        .to_owned();
+
+    let channel = Channel::from_shared(host)?
+        .tls_config(ClientTlsConfig::new())?
+        .connect()
+        .await?;
+
     if let Some(matches) = matches.subcommand_matches("users") {
-        command_users(matches).await?;
+        command_users(&matches, channel).await?;
     } else if let Some(matches) = matches.subcommand_matches("teams") {
-        command_teams(&matches).await?;
+        command_teams(&matches, channel).await?;
     } else if let Some(matches) = matches.subcommand_matches("sites") {
-        command_sites(&matches).await?;
+        command_sites(&matches, channel).await?;
     } else if let Some(matches) = matches.subcommand_matches("sources") {
-        command_sources(&matches).await?;
+        command_sources(&matches, channel).await?;
     } else if let Some(matches) = matches.subcommand_matches("domains") {
-        command_domains(&matches).await?;
+        command_domains(&matches, channel).await?;
     }
 
     Ok(())
 }
 
-async fn command_users(matches: &ArgMatches<'_>) -> Result<()> {
+async fn command_users(matches: &ArgMatches<'_>, channel: Channel) -> Result<()> {
     use std::io::{stdin, stdout, Write};
     use termion::input::TermRead;
 
@@ -137,10 +148,7 @@ async fn command_users(matches: &ArgMatches<'_>) -> Result<()> {
     let stdin = stdin();
     let mut stdin = stdin.lock();
 
-    let mut users_client = fairing_proto::users::v1beta1::users_client::UsersClient::connect(
-        "http://api.localhost:8080",
-    )
-    .await?;
+    let mut users_client = fairing_proto::users::v1beta1::users_client::UsersClient::new(channel);
 
     if let Some(_matches) = matches.subcommand_matches("create") {
         stdout.write_all(b"Username: ")?;
@@ -217,14 +225,11 @@ async fn command_users(matches: &ArgMatches<'_>) -> Result<()> {
     Ok(())
 }
 
-async fn command_teams(matches: &ArgMatches<'_>) -> Result<()> {
+async fn command_teams(matches: &ArgMatches<'_>, channel: Channel) -> Result<()> {
     use fairing_proto::teams::v1beta1::{
         teams_client::TeamsClient, CreateTeamRequest, ListTeamsRequest,
     };
 
-    let channel = Channel::from_static("http://api.localhost:8080")
-        .connect()
-        .await?;
     let auth = ConfigAuth::read().await?;
 
     let mut teams_client = TeamsClient::with_interceptor(channel, auth);
@@ -258,7 +263,7 @@ async fn command_teams(matches: &ArgMatches<'_>) -> Result<()> {
     Ok(())
 }
 
-async fn command_sites(matches: &ArgMatches<'_>) -> Result<()> {
+async fn command_sites(matches: &ArgMatches<'_>, channel: Channel) -> Result<()> {
     use fairing_proto::sites::v1beta1::{
         sites_client::SitesClient, CreateSiteRequest, ListSitesRequest,
     };
@@ -266,9 +271,6 @@ async fn command_sites(matches: &ArgMatches<'_>) -> Result<()> {
         source, sources_client::SourcesClient, CreateSourceRequest, Source,
     };
 
-    let channel = Channel::from_static("http://api.localhost:8080")
-        .connect()
-        .await?;
     let auth = ConfigAuth::read().await?;
 
     let mut sites_client = SitesClient::with_interceptor(channel.clone(), auth.clone());
@@ -346,12 +348,9 @@ async fn command_sites(matches: &ArgMatches<'_>) -> Result<()> {
     Ok(())
 }
 
-async fn command_sources(matches: &ArgMatches<'_>) -> Result<()> {
+async fn command_sources(matches: &ArgMatches<'_>, channel: Channel) -> Result<()> {
     use fairing_proto::sources::v1beta1::{sources_client::SourcesClient, RefreshSourceRequest};
 
-    let channel = Channel::from_static("http://api.localhost:8080")
-        .connect()
-        .await?;
     let auth = ConfigAuth::read().await?;
 
     let mut sources_client = SourcesClient::with_interceptor(channel, auth);
@@ -369,14 +368,11 @@ async fn command_sources(matches: &ArgMatches<'_>) -> Result<()> {
     Ok(())
 }
 
-async fn command_domains(matches: &ArgMatches<'_>) -> Result<()> {
+async fn command_domains(matches: &ArgMatches<'_>, channel: Channel) -> Result<()> {
     use fairing_proto::domains::v1beta1::{
         domains_client::DomainsClient, CreateDomainRequest, SetDomainSiteRequest,
     };
 
-    let channel = Channel::from_static("http://api.localhost:8080")
-        .connect()
-        .await?;
     let auth = ConfigAuth::read().await?;
 
     let mut domains_client = DomainsClient::with_interceptor(channel, auth);
