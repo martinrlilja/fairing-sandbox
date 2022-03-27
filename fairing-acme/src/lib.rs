@@ -264,10 +264,19 @@ impl ES256SecretKey {
 
 impl ES256PublicKey {
     pub fn key_authorization(&self, token: &str) -> String {
-        let jwk = serde_json::to_string(&self.to_jwk()).unwrap();
+        use std::collections::BTreeMap;
+
+        // Sort the keys before serializing.
+        let jwk = serde_json::to_value(&self.to_jwk()).unwrap();
+        let jwk = if let serde_json::Value::Object(jwk) = jwk {
+            let jwk = jwk.into_iter().collect::<BTreeMap<_, _>>();
+            serde_json::to_vec(&jwk).unwrap()
+        } else {
+            unreachable!("jwk must be an object");
+        };
 
         let mut hasher = Sha256::new();
-        hasher.update(jwk.as_bytes());
+        hasher.update(&jwk);
 
         let thumbprint = hasher.finalize();
         let thumbprint = base64::encode_config(thumbprint, base64::URL_SAFE_NO_PAD);
