@@ -303,6 +303,7 @@ async fn main() -> Result<()> {
             config.http.redirect_https,
             config.http.redirect_https_port,
             config.https.bind,
+            config.api.host,
         )
         .await?;
     } else if let Commands::Acme { command } = args.command {

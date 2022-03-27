@@ -37,6 +37,7 @@ pub async fn serve(
     https_redirect: bool,
     https_redirect_port: Option<u16>,
     https_addr: Vec<SocketAddr>,
+    api_host: String,
 ) -> Result<()> {
     let certificate_resolver = certificate_resolver::CertificateResolver::new(database.clone());
 
@@ -46,17 +47,25 @@ pub async fn serve(
         let http_listener = TcpListener::bind(&http_addr).await?;
         let http_acceptor = hyper::server::conn::AddrIncoming::from_listener(http_listener)?;
 
-        let database = database.clone();
-        let file_metadata = file_metadata.clone();
-        let file_storage = file_storage.clone();
-
         if https_redirect {
             task_set.push(tokio::spawn(async move {
                 server_https_redirect(https_redirect_port, http_acceptor).await
             }));
         } else {
+            let database = database.clone();
+            let file_metadata = file_metadata.clone();
+            let file_storage = file_storage.clone();
+            let api_host = api_host.clone();
+
             task_set.push(tokio::spawn(async move {
-                server(database, file_metadata, file_storage, http_acceptor).await
+                server(
+                    database,
+                    file_metadata,
+                    file_storage,
+                    http_acceptor,
+                    api_host,
+                )
+                .await
             }));
         }
 
@@ -72,9 +81,17 @@ pub async fn serve(
         let database = database.clone();
         let file_metadata = file_metadata.clone();
         let file_storage = file_storage.clone();
+        let api_host = api_host.clone();
 
         task_set.push(tokio::spawn(async move {
-            server(database, file_metadata, file_storage, https_acceptor).await
+            server(
+                database,
+                file_metadata,
+                file_storage,
+                https_acceptor,
+                api_host,
+            )
+            .await
         }));
 
         tracing::info!("https listening on {https_addr}");
@@ -92,6 +109,7 @@ async fn server<Accept>(
     file_metadata: FileMetadata,
     file_storage: FileStorage,
     acceptor: Accept,
+    api_host: String,
 ) -> Result<()>
 where
     Accept: hyper::server::accept::Accept,
@@ -140,6 +158,7 @@ where
             let database = database.clone();
             let file_metadata = file_metadata.clone();
             let file_storage = file_storage.clone();
+            let api_host = api_host.clone();
 
             future::ok::<_, Infallible>(tower::service_fn(
                 move |req: hyper::Request<hyper::Body>| {
@@ -172,14 +191,12 @@ where
                     );
 
                     match (req.version(), host) {
-                        (http::Version::HTTP_2, Some(host)) if host == "api.localhost" => {
-                            Either::Left(
-                                tonic
-                                    .call(req)
-                                    .map_ok(|res| res.map(EitherBody::Left))
-                                    .map_err(|err| anyhow!("tonic error: {:?}", err)),
-                            )
-                        }
+                        (http::Version::HTTP_2, Some(host)) if host == api_host => Either::Left(
+                            tonic
+                                .call(req)
+                                .map_ok(|res| res.map(EitherBody::Left))
+                                .map_err(|err| anyhow!("tonic error: {:?}", err)),
+                        ),
                         _ => Either::Right(
                             web::handle(
                                 req,

@@ -106,12 +106,20 @@ impl<Backend: AcmeClientBackend + Send> AcmeService<Backend> {
 
         tracing::trace!("waiting for order to not be pending");
 
-        let mut order = self.client.get_order(&order.url).await.context("get order")?;
+        let mut order = self
+            .client
+            .get_order(&order.url)
+            .await
+            .context("get order")?;
 
         while let OrderStatus::Pending = order.status {
             tokio::time::sleep(Duration::from_secs(10)).await;
 
-            order = self.client.get_order(&order.url).await.context("get order")?;
+            order = self
+                .client
+                .get_order(&order.url)
+                .await
+                .context("get order")?;
         }
 
         if let OrderStatus::Invalid = order.status {
