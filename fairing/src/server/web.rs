@@ -10,8 +10,9 @@ pub async fn handle(
     database: Database,
     file_metadata: FileMetadata,
     file_storage: FileStorage,
+    authority: Option<http::uri::Authority>,
 ) -> Result<hyper::Response<hyper::Body>> {
-    let res = handle_inner(req, database, file_metadata, file_storage).await;
+    let res = handle_inner(req, database, file_metadata, file_storage, authority).await;
     match res {
         Ok(res) => Ok(res),
         Err(err) => {
@@ -30,15 +31,11 @@ async fn handle_inner(
     database: Database,
     file_metadata: FileMetadata,
     file_storage: FileStorage,
+    authority: Option<http::uri::Authority>,
 ) -> Result<hyper::Response<hyper::Body>> {
-    let deployment_lookup = req
-        .uri()
-        .host()
-        .or_else(|| {
-            req.headers()
-                .get(http::header::HOST)
-                .and_then(|host| host.to_str().ok())
-        })
+    let deployment_lookup = authority
+        .as_ref()
+        .map(|authority| authority.host())
         .and_then(models::DeploymentHostLookup::parse);
 
     let deployment_lookup = match deployment_lookup {

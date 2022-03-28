@@ -43,6 +43,9 @@ pub async fn serve(
 
     let mut task_set = Vec::<tokio::task::JoinHandle<Result<()>>>::new();
 
+    // Leak the api host so that we don't have to clone it everywhere.
+    let api_host: &'static str = Box::leak(api_host.into_boxed_str());
+
     for http_addr in http_addr {
         let http_listener = TcpListener::bind(&http_addr).await?;
         let http_acceptor = hyper::server::conn::AddrIncoming::from_listener(http_listener)?;
@@ -55,7 +58,6 @@ pub async fn serve(
             let database = database.clone();
             let file_metadata = file_metadata.clone();
             let file_storage = file_storage.clone();
-            let api_host = api_host.clone();
 
             task_set.push(tokio::spawn(async move {
                 server(
@@ -81,7 +83,6 @@ pub async fn serve(
         let database = database.clone();
         let file_metadata = file_metadata.clone();
         let file_storage = file_storage.clone();
-        let api_host = api_host.clone();
 
         task_set.push(tokio::spawn(async move {
             server(
@@ -109,7 +110,7 @@ async fn server<Accept>(
     file_metadata: FileMetadata,
     file_storage: FileStorage,
     acceptor: Accept,
-    api_host: String,
+    api_host: &'static str,
 ) -> Result<()>
 where
     Accept: hyper::server::accept::Accept,
@@ -158,18 +159,19 @@ where
             let database = database.clone();
             let file_metadata = file_metadata.clone();
             let file_storage = file_storage.clone();
-            let api_host = api_host.clone();
 
             future::ok::<_, Infallible>(tower::service_fn(
                 move |req: hyper::Request<hyper::Body>| {
                     let sni_hostname = sni_hostname.clone();
 
-                    let host = req.uri().host().or_else(|| {
-                        req.headers()
-                            .get(http::header::HOST)
-                            .and_then(|host| host.to_str().ok())
-                            .and_then(|host| host.split(':').next())
+                    let authority = req.uri().authority().cloned().or_else(|| {
+                        req.headers().get(http::header::HOST).and_then(|host| {
+                            let host = host.as_bytes().to_vec();
+                            http::uri::Authority::from_maybe_shared(host).ok()
+                        })
                     });
+
+                    let host = authority.as_ref().map(|authority| authority.host());
 
                     match (sni_hostname, host) {
                         (Some(sni_hostname), Some(host))
@@ -203,6 +205,7 @@ where
                                 database.clone(),
                                 file_metadata.clone(),
                                 file_storage.clone(),
+                                authority,
                             )
                             .map_ok(|res| res.map(EitherBody::Right)),
                         ),
@@ -229,14 +232,13 @@ where
         .serve(make_service_fn(move |_| {
             future::ok::<_, Infallible>(tower::service_fn(
                 move |req: hyper::Request<hyper::Body>| {
-                    let host = req
-                        .headers()
-                        .get(http::header::HOST)
-                        .and_then(|host| host.to_str().ok())
-                        .and_then(|host| host.split(':').next());
+                    let authority = req.headers().get(http::header::HOST).and_then(|host| {
+                        let host = host.as_bytes().to_vec();
+                        http::uri::Authority::from_maybe_shared(host).ok()
+                    });
 
-                    // TODO: validate host before performing redirect.
-                    let res = if let Some(host) = host {
+                    let res = if let Some(authority) = authority {
+                        let host = authority.host();
                         let location = if let Some(https_redirect_port) = https_redirect_port {
                             format!("https://{host}:{https_redirect_port}")
                         } else {
