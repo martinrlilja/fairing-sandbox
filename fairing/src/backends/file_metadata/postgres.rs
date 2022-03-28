@@ -196,7 +196,8 @@ impl file_metadata::FileMetadataRepository for PostgresDatabase {
             r"
             SELECT f.file_keyspace, f.checksum, f.size, f.is_valid_utf8
             FROM files f
-            JOIN layer_members lm ON lm.file_keyspace = f.file_keyspace AND lm.file_checksum = f.checksum
+            JOIN layer_members lm
+                ON lm.file_keyspace = f.file_keyspace AND lm.file_checksum = f.checksum
             WHERE lm.layer_set_id = $1 AND lm.layer_id = $2 AND lm.path = $3;
             "
         )
