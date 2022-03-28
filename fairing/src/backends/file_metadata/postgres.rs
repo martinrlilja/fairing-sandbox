@@ -199,7 +199,7 @@ impl file_metadata::FileMetadataRepository for PostgresDatabase {
             JOIN layer_members lm
                 ON lm.file_keyspace = f.file_keyspace AND lm.file_checksum = f.checksum
             WHERE lm.layer_set_id = $1 AND lm.layer_id = $2 AND lm.path = $3;
-            "
+            ",
         )
         .bind(layer_set_id)
         .bind(layer_id)
