@@ -698,7 +698,7 @@ impl database::DeploymentRepository for PostgresDatabase {
             JOIN deployments d
                 ON d.id = dp.deployment_id
             JOIN sites s
-                ON s.id = d.site_id
+                ON s.current_deployment_id = d.id
             JOIN domains domain
                 ON domain.team_id = s.team_id AND domain.site_id = s.id
             JOIN teams t
