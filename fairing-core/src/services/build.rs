@@ -1,10 +1,11 @@
-use anyhow::{anyhow, ensure, Context, Result};
+use anyhow::{anyhow, ensure, Context as _, Result};
 use futures_util::{pin_mut, stream::FuturesUnordered, StreamExt};
 use std::{
     io::ErrorKind,
     path::{Path, PathBuf},
 };
 use tokio::{fs, task};
+use tracing::Instrument as _;
 
 use crate::{
     backends::{BuildQueue, Database, FileMetadata, RemoteSource},
@@ -73,14 +74,25 @@ impl BuildService {
                 build,
             };
 
-            let build_task = tokio::task::spawn(async move {
+            let span = tracing::info_span!(
+                "build_task",
+                build_name = build_task.build.name.name(),
+                layer_id = ?build_task.build.layer_id,
+                source_reference = %build_task.build.source_reference,
+            );
+
+            let build_task = async move {
+                tracing::info!("starting build");
                 let res = build_task.run().await;
                 if let Err(err) = res {
-                    tracing::error!("{:?}", err);
+                    tracing::error!("build failed with {:?}", err);
+                } else {
+                    tracing::info!("build succeded");
                 }
-            });
+            }
+            .instrument(span);
 
-            self.build_tasks.push(build_task);
+            self.build_tasks.push(tokio::task::spawn(build_task));
 
             if self.build_tasks.len() >= self.concurrent_builds {
                 // If there are too many concurrent builds, wait for at least one of them to
@@ -117,8 +129,6 @@ impl BuildTask {
             .await?
             .ok_or_else(|| anyhow!("site source not found"))?;
 
-        tracing::trace!("running build");
-
         let work_directory = {
             let mut work_directory = PathBuf::new();
             work_directory.push(".build");
@@ -140,8 +150,6 @@ impl BuildTask {
         tracing::trace!("fetched source");
 
         let build_file = read_build_file(&source_directory).await?;
-
-        tracing::debug!("build file: {:?}", build_file);
 
         let team_name = source_name.parent();
         let team = self
@@ -172,13 +180,13 @@ impl BuildTask {
         );
 
         let mut directories = vec![publish_directory.clone()];
+        let mut stored_files = 0;
 
         while let Some(directory) = directories.pop() {
             let mut read_dir = fs::read_dir(directory).await.context("read directory")?;
 
             while let Some(entry) = read_dir.next_entry().await? {
                 let entry_metadata = entry.metadata().await.context("read file metadata")?;
-                tracing::debug!("path: {:?}", entry.path());
 
                 if entry_metadata.is_dir() {
                     directories.push(entry.path());
@@ -219,11 +227,16 @@ impl BuildTask {
                     self.file_metadata
                         .create_layer_member(&layer_member)
                         .await?;
+
+                    stored_files += 1;
                 }
             }
         }
 
+        tracing::trace!("stored {} files", stored_files);
+
         tracing::trace!("cleaning work directory: {:?}", work_directory);
+
         fs::remove_dir_all(work_directory).await?;
 
         tracing::trace!("creating deployments");
@@ -253,8 +266,6 @@ impl BuildTask {
 
             tracing::trace!("created deployment: {}", deployment.name.name());
         }
-
-        tracing::trace!("build complete");
 
         Ok(())
     }

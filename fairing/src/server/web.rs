@@ -65,6 +65,7 @@ async fn handle_inner(
     };
 
     let path = req.uri().path();
+    let path = percent_encoding::percent_decode_str(path).decode_utf8()?;
 
     let projection = projections
         .into_iter()
@@ -81,7 +82,7 @@ async fn handle_inner(
         }
     };
 
-    let file = find_layer_member_file(&file_metadata, &projection, path).await?;
+    let file = find_layer_member_file(&file_metadata, &projection, &path).await?;
     let (file, mime_type) = match file {
         Some(file) => file,
         None => {

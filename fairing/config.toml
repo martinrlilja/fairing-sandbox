@@ -1,0 +1,26 @@
+[database]
+type = "postgres"
+url = "psql://postgres:password@localhost:5432/postgres"
+
+[acme]
+server = "https://0.0.0.0:14000/dir"
+danger_accept_invalid_certs = true
+#secret_key = "MGsCAQEEIHBTbT_5J7uOOEzCWt3oOmNrq-j5gHdR_TagWCGIgd1PoUQDQgAEbXTbd2idQS0xwiSyF3p90xEVe887Byk8p4Sx7ZU-1p2tZLJLvD-yfhKOqyRSNWogajihDLiE9haoQ-BGdfPRqA"
+#secret_key_id = "https://0.0.0.0:14000/my-account/1"
+
+[acme.dns]
+type = "server"
+udp_bind = ["[::1]:8053"]
+tcp_bind = ["[::1]:8053"]
+zone = "acme.localhost"
+
+[http]
+bind = ["[::1]:8080"]
+redirect_https = false
+redirect_https_port = 8443
+
+[https]
+bind = ["[::1]:8443"]
+
+[api]
+host = "api.localhost"

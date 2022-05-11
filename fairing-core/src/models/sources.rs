@@ -111,6 +111,7 @@ impl FromStr for GitRepository {
     }
 }
 
+#[derive(Clone, Debug)]
 pub struct GitRepositoryParts {
     pub user: String,
     pub host: String,

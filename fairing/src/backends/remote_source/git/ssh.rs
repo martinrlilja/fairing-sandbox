@@ -15,7 +15,6 @@ pub trait SshReader {
 pub struct SshClientConfig<'a, Addr: tokio::net::ToSocketAddrs> {
     pub addr: Addr,
     pub user: &'a str,
-    pub command: &'a str,
     pub key_pair: thrussh_keys::key::KeyPair,
 }
 
@@ -51,21 +50,27 @@ impl SshClient {
             return Err(anyhow!("could not authenticate"));
         }
 
-        let mut channel = session
+        let channel = session
             .channel_open_session()
             .await
             .context("opening channel session")?;
-
-        channel
-            .exec(true, config.command)
-            .await
-            .context("executing command")?;
 
         Ok(SshClient {
             session,
             channel,
             buffer: None,
         })
+    }
+
+    pub async fn exec(&mut self, command: &str) -> Result<()> {
+        self.buffer = None;
+
+        self.channel
+            .exec(true, command)
+            .await
+            .context("executing command")?;
+
+        Ok(())
     }
 
     pub async fn disconnect(mut self) -> Result<()> {
@@ -124,10 +129,11 @@ impl SshClient {
                         Err(nom::Err::Failure(err)) => return Err(anyhow!("{:?}", err)),
                     }
                 }
-                ChannelMsg::ExitStatus { exit_status: 0 } => return Ok(None),
+                ChannelMsg::ExitStatus { exit_status: 0 } => (),
                 ChannelMsg::ExitStatus { exit_status } => {
                     return Err(anyhow!("exit status: {}", exit_status))
                 }
+                ChannelMsg::Eof => return Ok(None),
                 _ => (),
             }
         }

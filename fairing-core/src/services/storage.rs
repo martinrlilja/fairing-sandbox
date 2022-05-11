@@ -114,6 +114,8 @@ impl Storage {
         // If there is still data in the buffer once the file_stream is empty, assume that the data
         // left would be the last chunk.
         if !buffer.is_empty() {
+            utf8_validator.validate(&buffer);
+
             let blob = self.store_blob(&buffer).await?;
 
             let file_chunk = models::CreateFileChunk {
@@ -249,6 +251,7 @@ mod tests {
     #[test]
     fn test_utf8_validator_invalid() {
         let mut validator = Utf8Validator::new();
+        validator.validate(b"abc");
         validator.validate(b"\xc6bc");
         assert!(!validator.is_valid_utf8());
     }

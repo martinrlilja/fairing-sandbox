@@ -1,4 +1,4 @@
-use anyhow::Result;
+use anyhow::{ensure, Result};
 use miniz_oxide::inflate::stream::InflateState;
 use sha1::{Digest, Sha1};
 use std::{path::Path, sync::Arc};
@@ -52,13 +52,20 @@ impl GitPackFileReader {
         })
     }
 
-    pub async fn flush(mut self) -> Result<()> {
-        let index = self.index.clone();
-        task::spawn_blocking(move || index.flush()).await??;
+    pub async fn flush(mut self) -> Result<Arc<rocksdb::DB>> {
+        tracing::debug!("wrote {} bytes", self.next_object_file_offset);
+
+        if let Some(header) = self.header {
+            ensure!(
+                self.next_object_index == header.objects,
+                "expected {} objects got {}",
+                header.objects,
+                self.next_object_index
+            );
+        }
 
         self.pack.flush().await?;
-
-        Ok(())
+        Ok(self.index)
     }
 }
 
@@ -100,8 +107,6 @@ impl SshReader for GitPackFileReader {
                 })
                 .unwrap();
 
-                tracing::debug!("writing object {:?} to index", decoded_object.sha1_hash);
-
                 let index = self.index.clone();
                 task::spawn_blocking(move || index.put(&key, value))
                     .await
@@ -115,15 +120,13 @@ impl SshReader for GitPackFileReader {
 
             if self.next_object_index == header.objects {
                 // We have read all the objects we expected to read.
-                tracing::debug!("read all {} objects", header.objects);
+                tracing::trace!("read all {} objects", header.objects);
                 Ok((rest, None))
             } else {
                 Ok((rest, Some(())))
             }
         } else {
             let (input, object_header) = pack_file_object_header(input)?;
-
-            tracing::debug!("current_object: {:?}", object_header);
 
             self.current_object = Some(object_header);
 

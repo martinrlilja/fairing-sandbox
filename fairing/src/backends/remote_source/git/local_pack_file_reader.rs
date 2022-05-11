@@ -29,17 +29,17 @@ struct LocalPackFileReader {
 }
 
 impl LocalPackFileReader {
-    pub async fn open(path: impl AsRef<Path>) -> Result<LocalPackFileReader> {
+    pub async fn open(
+        path: impl AsRef<Path>,
+        index: Arc<rocksdb::DB>,
+    ) -> Result<LocalPackFileReader> {
         let path = path.as_ref().to_owned();
-        let datbase_path = path.join("index");
         let pack_path = path.join("pack");
-
-        let index = task::spawn_blocking(|| rocksdb::DB::open_default(datbase_path)).await??;
 
         let pack_mmap = LocalPackFileReader::open_pack_mmap(&pack_path).await?;
 
         Ok(LocalPackFileReader {
-            index: Arc::new(index),
+            index,
             pack_path,
             pack_mmap,
         })
@@ -106,13 +106,16 @@ impl LocalPackFileReader {
         }
     }
 
-    pub async fn list_ref_deltas(&self) -> Result<Vec<(Box<[u8]>, IndexObject, IndexObject)>> {
+    pub async fn list_ref_deltas(
+        &self,
+    ) -> Result<(Vec<(Box<[u8]>, IndexObject, IndexObject)>, usize)> {
         let index = self.index.clone();
 
         task::spawn_blocking(move || {
             let mut ref_deltas = vec![];
+            let mut ref_delta_parents_not_found = 0;
 
-            for (key, value) in index.iterator(rocksdb::IteratorMode::Start) {
+            for (key, value) in index.full_iterator(rocksdb::IteratorMode::Start) {
                 if ref_deltas.len() == 127 {
                     break;
                 }
@@ -128,10 +131,12 @@ impl LocalPackFileReader {
                 if let Some(parent) = index.get(&parent)? {
                     let parent = bincode::deserialize::<IndexObject>(&parent)?;
                     ref_deltas.push((key, value, parent));
+                } else {
+                    ref_delta_parents_not_found += 1;
                 }
             }
 
-            Ok(ref_deltas)
+            Ok((ref_deltas, ref_delta_parents_not_found))
         })
         .await?
     }
@@ -146,22 +151,35 @@ struct TreeParser<'a> {
     path: PathBuf,
 }
 
-pub async fn extract(commit_key: [u8; 20], work_directory: impl AsRef<Path>) -> Result<PathBuf> {
+#[tracing::instrument(skip(work_directory))]
+pub async fn extract(
+    commit_key: [u8; 20],
+    work_directory: impl AsRef<Path>,
+    index: Arc<rocksdb::DB>,
+) -> Result<PathBuf> {
     let work_directory = work_directory.as_ref();
-    let mut pack_file_reader = LocalPackFileReader::open(work_directory).await?;
+    let mut pack_file_reader = LocalPackFileReader::open(work_directory, index).await?;
     let source_directory = work_directory.join("source");
 
+    let mut reconstructed_ref_deltas = 0;
+
     // Reconstruct ref deltas.
+    tracing::trace!("reconstructing ref deltas");
     loop {
-        let ref_deltas = pack_file_reader
+        let (ref_deltas, ref_delta_parents_not_found) = pack_file_reader
             .list_ref_deltas()
             .await
             .context("listing ref deltas")?;
 
         if ref_deltas.is_empty() {
+            ensure!(
+                ref_delta_parents_not_found == 0,
+                "found {} orphaned ref deltas",
+                ref_delta_parents_not_found
+            );
             break;
         } else {
-            tracing::debug!("reconstructing {} ref deltas", ref_deltas.len());
+            reconstructed_ref_deltas += ref_deltas.len();
         }
 
         for (ref_delta_key, ref_delta, parent) in ref_deltas {
@@ -172,7 +190,6 @@ pub async fn extract(commit_key: [u8; 20], work_directory: impl AsRef<Path>) -> 
 
             let index = pack_file_reader.index();
 
-            tracing::trace!("writing object {:?} to index", reconstructed_key);
             task::spawn_blocking(move || {
                 index.put(reconstructed_key, value)?;
                 index.delete(ref_delta_key)?;
@@ -183,6 +200,8 @@ pub async fn extract(commit_key: [u8; 20], work_directory: impl AsRef<Path>) -> 
 
         pack_file_reader.refresh_pack_file().await?;
     }
+
+    tracing::debug!("reconstructed {reconstructed_ref_deltas} ref deltas");
 
     let (_commit, commit_data) = pack_file_reader
         .object(commit_key)
@@ -201,8 +220,6 @@ pub async fn extract(commit_key: [u8; 20], work_directory: impl AsRef<Path>) -> 
 
     fs::create_dir_all(&source_directory).await?;
 
-    tracing::debug!("{:?}", tree_data);
-
     let path_build = fs::canonicalize(&source_directory).await?;
     let mut tree_parsers = vec![TreeParser {
         input: tree_data,
@@ -213,13 +230,12 @@ pub async fn extract(commit_key: [u8; 20], work_directory: impl AsRef<Path>) -> 
         let (input, tree_item) = tree_item(tree_parser.input)
             .map_err(|err| anyhow!("error when parsing tree: {:?}", err))?;
 
-        tracing::debug!("tree item: {:?}", tree_item);
         match tree_item {
             TreeItem::Blob { mode, hash, name } => {
                 let (_blob, blob_data) = pack_file_reader
                     .object(hash)
                     .await?
-                    .ok_or_else(|| anyhow!("couldn't find blob"))?;
+                    .ok_or_else(|| anyhow!("couldn't find blob {:?}", hash))?;
 
                 let path = tree_parser.path.join(name);
                 let parent_path = fs::canonicalize(path.parent().unwrap()).await?;
@@ -255,7 +271,7 @@ pub async fn extract(commit_key: [u8; 20], work_directory: impl AsRef<Path>) -> 
                 let (_tree, tree_data) = pack_file_reader
                     .object(hash)
                     .await?
-                    .ok_or_else(|| anyhow!("couldn't find tree"))?;
+                    .ok_or_else(|| anyhow!("couldn't find tree {:?}", hash))?;
 
                 tree_parsers.push(TreeParser {
                     input: tree_data,
@@ -316,8 +332,6 @@ async fn reconstruct<'a>(
 
         match instruction {
             DeltaInstruction::InsertData(data) => {
-                tracing::debug!("inserting data {}", data.len());
-
                 pack_file
                     .write_all(data)
                     .await
@@ -326,7 +340,6 @@ async fn reconstruct<'a>(
                 written_bytes += data.len() as u64;
             }
             DeltaInstruction::CopyFromParent { offset, length } => {
-                tracing::debug!("copy from parent: {}/{}", offset, length);
                 assert!(
                     offset + length <= parent.length,
                     "offset ({}) and length ({}) outside of parent length ({})",

@@ -9,6 +9,7 @@ use pkt_line_reader::{GitPktLineOutput, GitPktLineReader};
 use ssh::{SshClient, SshClientConfig, SshReader};
 
 mod git_pack_file_reader;
+mod lfs;
 mod local_pack_file_reader;
 mod parsers;
 mod pkt_line_reader;
@@ -32,12 +33,10 @@ impl GitRemoteSource {
         git_source: &models::GitSource,
     ) -> Result<Vec<models::CreateBuild>> {
         let repository = git_source.repository_url.parts()?;
-        let command = format!("git-upload-pack '{}'", repository.path);
 
         let config = SshClientConfig {
-            addr: (repository.host, repository.port),
+            addr: (repository.host.as_str(), repository.port),
             user: &repository.user,
-            command: &command,
             key_pair: git_source.id_ed25519.key_pair(),
         };
 
@@ -45,6 +44,9 @@ impl GitRemoteSource {
         let mut reader = GitPktLineReader::new(&source.name);
 
         let mut revisions = vec![];
+
+        let command = format!("git-upload-pack '{}'", repository.path);
+        client.exec(&command).await?;
 
         while let Some(output) = client.read(&mut reader).await? {
             if revisions.len() > REVISION_LIMIT {
@@ -75,12 +77,10 @@ impl GitRemoteSource {
         work_directory: PathBuf,
     ) -> Result<PathBuf> {
         let repository = git_source.repository_url.parts()?;
-        let command = format!("git-upload-pack '{}'", repository.path);
 
         let config = SshClientConfig {
-            addr: (repository.host, repository.port),
+            addr: (repository.host.as_str(), repository.port),
             user: &repository.user,
-            command: &command,
             key_pair: git_source.id_ed25519.key_pair(),
         };
 
@@ -89,6 +89,9 @@ impl GitRemoteSource {
 
         let layer_set_name = build.name.parent();
         let mut found_hash: Option<String> = None;
+
+        let command = format!("git-upload-pack '{}'", repository.path);
+        client.exec(&command).await?;
 
         while let Some(output) = client.read(&mut reader).await? {
             match output {
@@ -129,7 +132,7 @@ impl GitRemoteSource {
 
         while let Some(Some(())) = client.read(&mut reader).await? {}
 
-        reader.flush().await?;
+        let index = reader.flush().await?;
 
         client.disconnect().await?;
 
@@ -139,7 +142,22 @@ impl GitRemoteSource {
             key
         };
 
-        let source_directory = local_pack_file_reader::extract(commit_key, &work_directory).await?;
+        let source_directory =
+            local_pack_file_reader::extract(commit_key, &work_directory, index).await?;
+
+        if lfs::detect(&source_directory).await? {
+            let config = SshClientConfig {
+                addr: (repository.host.as_str(), repository.port),
+                user: &repository.user,
+                key_pair: git_source.id_ed25519.key_pair(),
+            };
+
+            let mut client = SshClient::connect(config).await?;
+
+            lfs::download(&mut client, &repository, &source_directory).await?;
+
+            client.disconnect().await?;
+        }
 
         Ok(source_directory)
     }

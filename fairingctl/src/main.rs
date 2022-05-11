@@ -119,10 +119,14 @@ async fn main() -> Result<()> {
         .unwrap_or("http://api.localhost:8080")
         .to_owned();
 
-    let channel = Channel::from_shared(host)?
-        .tls_config(ClientTlsConfig::new())?
-        .connect()
-        .await?;
+    let channel = if host.starts_with("http://") {
+        Channel::from_shared(host)?.connect().await?
+    } else {
+        Channel::from_shared(host)?
+            .tls_config(ClientTlsConfig::new())?
+            .connect()
+            .await?
+    };
 
     if let Some(matches) = matches.subcommand_matches("users") {
         command_users(&matches, channel).await?;
