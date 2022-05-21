@@ -4,7 +4,7 @@ use std::{
     io::ErrorKind,
     path::{Path, PathBuf},
 };
-use tokio::{fs, task};
+use tokio::{fs, io::AsyncReadExt, task};
 use tracing::Instrument as _;
 
 use crate::{
@@ -129,6 +129,24 @@ impl BuildTask {
             .await?
             .ok_or_else(|| anyhow!("site source not found"))?;
 
+        let team_name = source_name.parent();
+        let team = self
+            .database
+            .get_team(&team_name)
+            .await?
+            .ok_or_else(|| anyhow!("failed to find team: {}", team_name.name()))?;
+
+        let file_keyspace = self
+            .file_metadata
+            .get_file_keyspace(&team.file_keyspace_id)
+            .await?
+            .ok_or_else(|| {
+                anyhow!(
+                    "failed to find file keyspace for team: {}",
+                    team_name.name()
+                )
+            })?;
+
         let work_directory = {
             let mut work_directory = PathBuf::new();
             work_directory.push(".build");
@@ -151,23 +169,63 @@ impl BuildTask {
 
         let build_file = read_build_file(&source_directory).await?;
 
-        let team_name = source_name.parent();
-        let team = self
-            .database
-            .get_team(&team_name)
-            .await?
-            .ok_or_else(|| anyhow!("failed to find team: {}", team_name.name()))?;
+        let mut modules = vec![];
+        for module in build_file.modules {
+            let module_path = source_directory.join(&module.path);
+            let module_path = fs::canonicalize(module_path).await?;
+            ensure!(
+                module_path.starts_with(&source_directory),
+                "module path \"{}\" points outside of source directory",
+                module.path
+            );
 
-        let file_keyspace = self
-            .file_metadata
-            .get_file_keyspace(&team.file_keyspace_id)
-            .await?
-            .ok_or_else(|| {
-                anyhow!(
-                    "failed to find file keyspace for team: {}",
-                    team_name.name()
-                )
-            })?;
+            let extension = module_path.extension();
+
+            let mut file = fs::OpenOptions::new()
+                .read(true)
+                .open(&module_path)
+                .await
+                .context("read module")?;
+            let metadata = file.metadata().await?;
+
+            let file_id = match extension {
+                Some(extension) if extension == "wat" => {
+                    ensure!(metadata.len() < 4_194_304);
+
+                    let mut buf = Vec::with_capacity(metadata.len().try_into()?);
+                    file.read_to_end(&mut buf).await?;
+
+                    let module_data = wat::parse_bytes(&buf)?;
+
+                    if let std::borrow::Cow::Borrowed(_) = module_data {
+                        return Err(anyhow!(
+                            "module \"{}\" is not a valid wat file",
+                            module.path
+                        ));
+                    }
+
+                    let module_data_len = module_data.len();
+
+                    let stream = futures_util::stream::once(async move { Ok(module_data) });
+
+                    self.storage
+                        .store_file(&file_keyspace, module_data_len as i64, Box::pin(stream))
+                        .await
+                        .context("store module")?
+                }
+                _ => {
+                    // TODO: parse the wasm file to make sure it is correct.
+                    let stream = tokio_util::io::ReaderStream::new(file);
+
+                    self.storage
+                        .store_file(&file_keyspace, metadata.len() as i64, stream)
+                        .await
+                        .context("store module")?
+                }
+            };
+
+            modules.push(models::DeploymentModule { file_id });
+        }
 
         let publish_directory = source_directory.join(build_file.build.publish);
         let publish_directory = fs::canonicalize(publish_directory)
@@ -255,6 +313,7 @@ impl BuildTask {
                     mount_path: "",
                     sub_path: "",
                 }],
+                modules: modules.clone(),
             };
 
             let deployment = self.database.create_deployment(&deployment).await?;
@@ -293,6 +352,7 @@ async fn read_build_file(path: impl AsRef<Path>) -> Result<BuildFile> {
                 build: BuildFileBuild {
                     publish: ".".into(),
                 },
+                modules: vec![],
             })
         }
         Err(err) => Err(err.into()),
@@ -302,9 +362,17 @@ async fn read_build_file(path: impl AsRef<Path>) -> Result<BuildFile> {
 #[derive(Clone, Debug, serde::Deserialize)]
 struct BuildFile {
     build: BuildFileBuild,
+    #[serde(default)]
+    modules: Vec<BuildFileModule>,
 }
 
 #[derive(Clone, Debug, serde::Deserialize)]
 struct BuildFileBuild {
     publish: String,
+}
+
+#[derive(Clone, Debug, serde::Deserialize)]
+struct BuildFileModule {
+    name: String,
+    path: String,
 }

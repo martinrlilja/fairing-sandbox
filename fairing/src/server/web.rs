@@ -49,11 +49,11 @@ async fn handle_inner(
         }
     };
 
-    let projections = database.get_deployment_by_host(&deployment_lookup).await?;
-    let projections = match projections {
-        Some(mut projections) => {
+    let deployment = database.get_deployment_by_host(&deployment_lookup).await?;
+    let (projections, modules) = match deployment {
+        Some((mut projections, modules)) => {
             projections.sort_by(|a, b| b.mount_path.cmp(&a.mount_path));
-            projections
+            (projections, modules)
         }
         None => {
             let res = hyper::Response::builder()
@@ -113,6 +113,94 @@ async fn handle_inner(
         .status(http::status::StatusCode::OK)
         .header(http::header::CONTENT_TYPE, mime_type)
         .body(hyper::Body::from(body))?;
+
+    let mut config = wasmtime::Config::new();
+    config.async_support(true);
+
+    let engine = wasmtime::Engine::new(&config)?;
+
+    let mut store = wasmtime::Store::new(&engine, res);
+
+    for module in modules.iter() {
+        let blob_checksums = file_metadata.get_file_chunks(&module.file_id).await?;
+        let mut module_data = Vec::new();
+
+        for blob_checksum in blob_checksums {
+            let blob = file_storage
+                .load_blob(&models::BlobChecksum(blob_checksum))
+                .await?;
+            let reader = std::io::Cursor::new(blob);
+            // TODO: check if the blob is compressed.
+            let blob = zstd::decode_all(reader)?;
+            module_data.extend_from_slice(&blob);
+        }
+
+        let module = wasmtime::Module::new(&engine, module_data)?;
+
+        let mut linker = wasmtime::Linker::new(&engine);
+
+        linker.func_wrap(
+            "fairing_v1alpha1",
+            "response_append_header",
+            |mut caller: wasmtime::Caller<'_, hyper::Response<hyper::Body>>,
+             name_ptr: u32,
+             name_len: u32,
+             value_ptr: u32,
+             value_len: u32| {
+                let memory = match caller.get_export("mem") {
+                    Some(wasmtime::Extern::Memory(memory)) => memory,
+                    _ => return 1,
+                };
+
+                let memory = memory.data(&caller);
+
+                if name_len > 8_192 || value_len > 8_192 {
+                    return 2;
+                }
+
+                let name_end = match name_ptr.checked_add(name_len) {
+                    Some(name_end) => name_end as usize,
+                    None => return 2,
+                };
+
+                let value_end = match value_ptr.checked_add(value_len) {
+                    Some(value_end) => value_end as usize,
+                    None => return 2,
+                };
+
+                if name_end >= memory.len() || value_end >= memory.len() {
+                    return 2;
+                }
+
+                let name = &memory[name_ptr as usize..name_end];
+                let name = match hyper::header::HeaderName::from_bytes(name) {
+                    Ok(name) => name,
+                    Err(_) => return 3,
+                };
+
+                let value = &memory[value_ptr as usize..value_end];
+                let value = match hyper::header::HeaderValue::from_bytes(value) {
+                    Ok(value) => value,
+                    Err(_) => return 3,
+                };
+
+                let res = caller.data_mut();
+
+                res.headers_mut().append(name, value);
+
+                0
+            },
+        )?;
+
+        let instance = linker.instantiate_async(&mut store, &module).await?;
+
+        let fairing_request =
+            instance.get_typed_func::<(), (), _>(&mut store, "fairing_request")?;
+
+        fairing_request.call_async(&mut store, ()).await?;
+    }
+
+    let res = store.into_data();
 
     Ok(res)
 }

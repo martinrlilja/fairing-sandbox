@@ -37,6 +37,7 @@ unicode-normalization = "0.1"
 unicode-script = "0.5"
 url = "2"
 utf8parse = "0.2"
-uuid = { version = "0.8", features = ["v4"] }
+uuid = { version = "0.8", features = ["v4", "serde"] }
 x509-parser = "0.13"
-zstd = "0.9"
+wat = "1"
+zstd = "0.11"

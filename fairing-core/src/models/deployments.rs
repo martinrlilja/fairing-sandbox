@@ -24,11 +24,18 @@ impl<'n> ParentedResourceName<'n> for DeploymentName<'n> {
 pub struct Deployment {
     pub name: DeploymentName<'static>,
     pub created_time: DateTime<Utc>,
+    pub modules: sqlx::types::Json<Vec<DeploymentModule>>,
 }
 
 pub struct CreateDeployment<'a> {
     pub parent: models::SiteName<'static>,
     pub projections: Vec<CreateDeploymentProjection<'a>>,
+    pub modules: Vec<DeploymentModule>,
+}
+
+#[derive(Clone, Debug, serde::Deserialize, serde::Serialize)]
+pub struct DeploymentModule {
+    pub file_id: models::FileId,
 }
 
 impl<'a> CreateDeployment<'a> {
@@ -84,6 +91,7 @@ impl<'a> CreateDeployment<'a> {
             Deployment {
                 name,
                 created_time: Utc::now(),
+                modules: sqlx::types::Json(self.modules.clone()),
             },
             projections,
         ))

@@ -35,7 +35,7 @@ percent-encoding = "2"
 rand = "0.8"
 reqwest = { version = "0.11", features = ["json"] }
 rcgen = "0.8"
-rocksdb = { version = "0.18", default-features = false, features = ["zstd"] }
+rocksdb = { version = "0.18", default-features = false }
 rustls = "0.20"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
@@ -55,4 +55,5 @@ trust-dns-client = "0.21"
 trust-dns-proto = "0.21"
 trust-dns-server = "0.21"
 uuid = { version = "0.8", features = ["v4"] }
-zstd = "0.9"
+wasmtime = { version = "0.37", default-features = false, features = ["async", "cache", "cranelift", "pooling-allocator"] }
+zstd = "0.11"

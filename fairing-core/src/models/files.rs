@@ -32,7 +32,7 @@ pub struct CreateBlob {
     pub compression_level: i16,
 }
 
-#[derive(Copy, Clone, Debug, sqlx::Type)]
+#[derive(Copy, Clone, Debug, sqlx::Type, serde::Serialize, serde::Deserialize)]
 #[sqlx(transparent)]
 pub struct FileKeyspaceId(pub uuid::Uuid);
 
@@ -61,7 +61,7 @@ impl CreateFileKeyspace {
     }
 }
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]
 pub struct FileId(pub FileKeyspaceId, pub Vec<u8>);
 
 #[derive(Clone, Debug)]

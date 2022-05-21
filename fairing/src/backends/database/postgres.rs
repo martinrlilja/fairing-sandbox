@@ -35,11 +35,18 @@ impl PostgresDatabase {
     pub async fn migrate(&self) -> Result<()> {
         use sqlx::migrate::{Migrate, Migration, MigrationType};
 
-        const MIGRATIONS: &[(i64, &'static str, &'static str)] = &[(
-            1,
-            "initial",
-            include_str!("../../../migrations/postgres/0001_initial.sql"),
-        )];
+        const MIGRATIONS: &[(i64, &'static str, &'static str)] = &[
+            (
+                1,
+                "initial",
+                include_str!("../../../migrations/postgres/0001_initial.sql"),
+            ),
+            (
+                2,
+                "modules_field",
+                include_str!("../../../migrations/postgres/0002_modules_field.sql"),
+            ),
+        ];
 
         tracing::info!("checking migrations");
 
@@ -626,17 +633,18 @@ impl database::DeploymentRepository for PostgresDatabase {
 
         let query_result = sqlx::query(
             r"
-            INSERT INTO deployments (id, created_time, name, site_id)
-            SELECT $1, $2, $3, s.id
+            INSERT INTO deployments (id, created_time, name, site_id, modules)
+            SELECT $1, $2, $3, s.id, $4
             FROM sites s
             JOIN teams t
                 ON t.id = s.team_id
-            WHERE t.name = $4 AND s.name = $5;
+            WHERE t.name = $5 AND s.name = $6;
             ",
         )
         .bind(&deployment_id)
         .bind(&deployment.created_time)
         .bind(deployment.name.resource())
+        .bind(&deployment.modules)
         .bind(deployment.name.parent().parent().resource())
         .bind(deployment.name.parent().resource())
         .execute(&mut tx)
@@ -690,7 +698,12 @@ impl database::DeploymentRepository for PostgresDatabase {
     async fn get_deployment_by_host(
         &self,
         lookup: &models::DeploymentHostLookup,
-    ) -> Result<Option<Vec<models::DeploymentProjectionAsdf>>> {
+    ) -> Result<
+        Option<(
+            Vec<models::DeploymentProjectionAsdf>,
+            Vec<models::DeploymentModule>,
+        )>,
+    > {
         let projections = sqlx::query_as(
             r"
             SELECT t.file_keyspace_id, dp.layer_set_id, dp.layer_id, dp.mount_path, dp.sub_path
@@ -710,7 +723,24 @@ impl database::DeploymentRepository for PostgresDatabase {
         .fetch_all(&self.pool)
         .await?;
 
-        Ok(Some(projections))
+        let modules = sqlx::query_scalar(
+            r"
+            SELECT d.modules
+            FROM deployments d
+            JOIN sites s
+                ON s.current_deployment_id = d.id
+            JOIN domains domain
+                ON domain.team_id = s.team_id AND domain.site_id = s.id
+            JOIN teams t
+                ON t.id = s.team_id
+            WHERE domain.name = $1 AND domain.is_validated = true;
+            ",
+        )
+        .bind(lookup.host())
+        .fetch_optional(&self.pool)
+        .await?;
+
+        Ok(modules.map(|sqlx::types::Json(modules)| (projections, modules)))
     }
 }
 
