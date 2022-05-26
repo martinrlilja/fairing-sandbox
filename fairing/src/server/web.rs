@@ -141,6 +141,28 @@ async fn handle_inner(
 
         linker.func_wrap(
             "fairing_v1alpha1",
+            "response_set_status_code",
+            |mut caller: wasmtime::Caller<'_, hyper::Response<hyper::Body>>, status_code: u32| {
+                let res = caller.data_mut();
+
+                let status_code: u16 = match status_code.try_into() {
+                    Ok(status_code) => status_code,
+                    Err(_) => return 1,
+                };
+
+                let status_code = match hyper::StatusCode::from_u16(status_code) {
+                    Ok(status_code) => status_code,
+                    Err(_) => return 1,
+                };
+
+                *res.status_mut() = status_code;
+
+                0
+            },
+        )?;
+
+        linker.func_wrap(
+            "fairing_v1alpha1",
             "response_append_header",
             |mut caller: wasmtime::Caller<'_, hyper::Response<hyper::Body>>,
              name_ptr: u32,
