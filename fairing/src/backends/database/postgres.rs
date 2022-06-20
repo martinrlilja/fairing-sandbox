@@ -858,6 +858,7 @@ impl database::DomainRepository for PostgresDatabase {
             JOIN domains d
                 ON d.team_id = c.team_id AND d.id = c.domain_id
             WHERE d.name = $1 AND d.is_validated = true
+            ORDER BY c.created_time DESC
             LIMIT 1;
             ",
         )
