@@ -962,16 +962,27 @@ impl database::DomainRepository for PostgresDatabase {
             SELECT 'teams/' || t.name || '/domains/' || d.name AS name,
                     d.created_time, d.acme_label, d.is_validated
             FROM domains d
-            LEFT JOIN certificates c
-                ON c.domain_id = d.id
-                    AND c.expires_time - (c.expires_time - c.created_time) / 3 > NOW()
-            LEFT JOIN acme_challenges ac
-                ON ac.domain_id = d.id
-            LEFT JOIN acme_orders ao
-                ON ao.id = ac.acme_order_id AND NOW() - ao.created_time < interval '5 minutes'
+            LEFT JOIN LATERAL (
+                SELECT c.created_time, c.expires_time
+                FROM certificates c
+                WHERE c.domain_id = d.id
+                ORDER BY c.created_time DESC
+                LIMIT 1
+            ) c ON true
+            LEFT JOIN LATERAL (
+                SELECT ao.created_time
+                FROM acme_orders ao
+                LEFT JOIN acme_challenges ac
+                    ON ao.id = ac.acme_order_id
+                WHERE ac.domain_id = d.id
+                ORDER BY ao.created_time DESC
+                LIMIT 1
+            ) ao ON true
             JOIN teams t
                 ON t.id = d.team_id
-            WHERE c.id IS NULL AND ao.id IS NULL;
+            WHERE
+                (c.created_time IS NULL OR c.expires_time - (c.expires_time - c.created_time) / 3 < NOW())
+                AND (ao.created_time IS NULL OR NOW() - ao.created_time > interval '24 hour');
             ",
         )
         .fetch_optional(&self.pool)
