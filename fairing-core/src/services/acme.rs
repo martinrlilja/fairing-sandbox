@@ -169,7 +169,7 @@ impl<Backend: AcmeClientBackend + Send> AcmeService<Backend> {
                 })
                 .collect::<Vec<_>>();
 
-            let (_, public_key) = X509Certificate::from_der(&public_key_chain.last().unwrap())?;
+            let (_, public_key) = X509Certificate::from_der(&public_key_chain.first().unwrap())?;
             let validity = public_key.validity();
 
             let certificate = models::CreateCertificate {
