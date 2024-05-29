@@ -30,16 +30,14 @@ mod users;
 mod web;
 
 pub async fn serve(
-    database: Database,
-    file_metadata: FileMetadata,
-    file_storage: FileStorage,
+    http_service: fairing_core2::services::HttpService,
     http_addr: Vec<SocketAddr>,
     https_redirect: bool,
     https_redirect_port: Option<u16>,
     https_addr: Vec<SocketAddr>,
     api_host: String,
 ) -> Result<()> {
-    let certificate_resolver = certificate_resolver::CertificateResolver::new(database.clone());
+    //let certificate_resolver = certificate_resolver::CertificateResolver::new(database.clone());
 
     let mut task_set = Vec::<tokio::task::JoinHandle<Result<()>>>::new();
 
@@ -55,48 +53,28 @@ pub async fn serve(
                 server_https_redirect(https_redirect_port, http_acceptor).await
             }));
         } else {
-            let database = database.clone();
-            let file_metadata = file_metadata.clone();
-            let file_storage = file_storage.clone();
-
             task_set.push(tokio::spawn(async move {
-                server(
-                    database,
-                    file_metadata,
-                    file_storage,
-                    http_acceptor,
-                    api_host,
-                )
-                .await
+                server(http_service, http_acceptor, api_host).await
             }));
         }
 
         tracing::info!("http listening on {http_addr}");
     }
 
+    /*
     for https_addr in https_addr {
         let https_listener = TcpListener::bind(&https_addr).await?;
         let incoming_tls_stream =
             certificate_resolver::accept(https_listener, certificate_resolver.clone());
         let https_acceptor = hyper::server::accept::from_stream(incoming_tls_stream);
 
-        let database = database.clone();
-        let file_metadata = file_metadata.clone();
-        let file_storage = file_storage.clone();
-
         task_set.push(tokio::spawn(async move {
-            server(
-                database,
-                file_metadata,
-                file_storage,
-                https_acceptor,
-                api_host,
-            )
-            .await
+            server(http_service, https_acceptor, api_host).await
         }));
 
         tracing::info!("https listening on {https_addr}");
     }
+    */
 
     for task in task_set {
         task.await??;
@@ -106,9 +84,7 @@ pub async fn serve(
 }
 
 async fn server<Accept>(
-    database: Database,
-    file_metadata: FileMetadata,
-    file_storage: FileStorage,
+    http_service: fairing_core2::services::HttpService,
     acceptor: Accept,
     api_host: &'static str,
 ) -> Result<()>
@@ -118,6 +94,7 @@ where
     Accept::Conn:
         ConnectionInfo + tokio::io::AsyncRead + tokio::io::AsyncWrite + Unpin + Send + 'static,
 {
+    /*
     let web_config = tonic_web::config();
     let auth = AuthInterceptor::new(&database);
 
@@ -149,16 +126,16 @@ where
         .add_service(web_config.enable(sites_server))
         .add_service(web_config.enable(sources_server))
         .into_service();
+    */
 
     Server::builder(acceptor)
         .serve(make_service_fn(move |s: &Accept::Conn| {
+            let connection = http_service.handle_connection(
+                fairing_core2::services::ConnectionMeta::new(s.remote_addr(), s.sni_hostname()),
+            );
+
             let remote_addr = s.remote_addr();
             let sni_hostname = s.sni_hostname().map(str::to_owned);
-
-            let mut tonic = tonic.clone();
-            let database = database.clone();
-            let file_metadata = file_metadata.clone();
-            let file_storage = file_storage.clone();
 
             future::ok::<_, Infallible>(tower::service_fn(
                 move |req: hyper::Request<hyper::Body>| {
@@ -192,6 +169,9 @@ where
                         host = %host.unwrap_or("None"),
                     );
 
+                    connection.handle_request(req)
+
+                    /*
                     match (req.version(), host) {
                         (http::Version::HTTP_2, Some(host)) if host == api_host => Either::Left(
                             tonic
@@ -210,6 +190,7 @@ where
                             .map_ok(|res| res.map(EitherBody::Right)),
                         ),
                     }
+                    */
                 },
             ))
         }))

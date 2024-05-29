@@ -1,0 +1,34 @@
+[package]
+name = "fairing-core2"
+version = "0.1.0"
+authors = ["Martin Risell Lilja <martin.risell.lilja@gmail.com>"]
+edition = "2021"
+
+# See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
+
+[dependencies]
+anyhow = "1"
+async-trait = "0.1"
+base64 = "0.13"
+bincode = "2.0.0-rc.1"
+blake2 = "0.10"
+bytes = "1"
+chrono = "0.4"
+getrandom = "0.2"
+hex = "0.4"
+http = "0.2"
+http-body = "0.4"
+lazy_static = "1"
+pin-project = "1"
+rcgen = "0.10"
+regex = "1"
+rustls-pemfile = "1"
+thrussh-keys = "0.21"
+tokio = { version = "1", features = ["fs", "tracing"] }
+tracing = "0.1"
+trust-dns-resolver = "0.22"
+trust-dns-proto = "0.22"
+url = "2"
+uuid = { version = "1", features = ["v4"] }
+x509-parser = "0.14"
+fairing-acme = { path = "../../fairing-acme" }

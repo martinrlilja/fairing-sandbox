@@ -1,0 +1,28 @@
+[package]
+name = "git-repositories"
+version = "0.1.0"
+authors = ["Martin Risell Lilja <martin.risell.lilja@gmail.com>"]
+edition = "2021"
+
+# See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
+
+[dependencies]
+anyhow = "1"
+async-trait = "0.1"
+bincode = "1"
+fairing-core2 = { path = "../fairing-core" }
+futures = "0.3"
+glob = "0.3"
+hex = "0.4"
+memmap = "0.7"
+miniz_oxide = "0.4"
+nom = "7"
+reqwest = { version = "0.11", features = ["json"] }
+rocksdb = { version = "0.18", default-features = false }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+sha-1 = "0.9"
+thrussh = "0.33"
+thrussh-keys = "0.21"
+tokio = { version = "1", features = ["fs", "macros", "sync", "tracing"] }
+tracing = "0.1"

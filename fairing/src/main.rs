@@ -1,4 +1,4 @@
-use anyhow::Result;
+use anyhow::{Context as _, Result};
 use fairing_core::{
     models::{self, prelude::*},
     services::{AcmeService, BuildServiceBuilder, Storage},
@@ -25,7 +25,12 @@ struct Args {
 #[derive(clap::Subcommand, Debug)]
 enum Commands {
     /// Start the server.
-    Server,
+    Server {
+        #[clap(long)]
+        scylla_known_nodes: Vec<String>,
+        #[clap(long)]
+        scylla_keyspace: String,
+    },
     Acme {
         #[clap(subcommand)]
         command: AcmeCommands,
@@ -141,7 +146,10 @@ async fn main() -> Result<()> {
             }
         }
 
-        config.build()?.try_deserialize()?
+        config
+            .build()?
+            .try_deserialize()
+            .context("reading config")?
     };
 
     tracing_subscriber::registry()
@@ -152,7 +160,115 @@ async fn main() -> Result<()> {
         .with(console_subscriber::spawn())
         .init();
 
-    if let Commands::Server = args.command {
+    if let Commands::Server {
+        scylla_known_nodes,
+        scylla_keyspace,
+    } = args.command
+    {
+        use fairing_core2::services::{
+            Authentication, DomainService, LayerService, ProjectService, SourceService,
+        };
+
+        let database =
+            scylla_repositories::ScyllaRepository::connect(&scylla_known_nodes, &scylla_keyspace)
+                .await
+                .context("connecting to scylladb")?;
+        let database = Box::leak(Box::new(database));
+
+        let git_source = git_repositories::LocalGitSource;
+        let git_source = Box::leak(Box::new(git_source));
+
+        let auth = Authentication::System { project_id: None };
+
+        let domain_service = DomainService::new(database);
+        let project_service = ProjectService::new(database);
+        let source_service = SourceService::new(database, git_source, database);
+        let layer_service = LayerService::new(database);
+        let build_service = fairing_core2::services::BuildService::new(
+            database, database, git_source, database, database,
+        );
+        let http_service = fairing_core2::services::HttpService::new(database, database, database);
+
+        build_service.build().await?;
+
+        let project = project_service
+            .create_project(&auth, &fairing_core2::models::CreateProject)
+            .await
+            .context("creating project")?;
+
+        tracing::info!("{:?}", project);
+
+        let auth = Authentication::System {
+            project_id: Some(project.id),
+        };
+
+        let source = source_service
+            .create_source(
+                &auth,
+                &fairing_core2::models::CreateSource {
+                    name: "test".parse()?,
+                    kind: fairing_core2::models::CreateSourceKind::Git {
+                        repository_url: "git@github.com:martinrlilja/web-test.git".parse()?,
+                    },
+                },
+            )
+            .await?;
+
+        tracing::info!("{:#?}", source);
+
+        let layer_set = layer_service
+            .create_layer_set(
+                &auth,
+                &fairing_core2::models::CreateLayerSet {
+                    name: "test".parse()?,
+                    visibility: fairing_core2::models::LayerSetVisibility::Public,
+                    source: Some(fairing_core2::models::CreateLayerSetSource {
+                        source: source.clone(),
+                        kind: fairing_core2::models::CreateLayerSetSourceKind::Git {
+                            ref_: "refs/heads/master".into(),
+                        },
+                    }),
+                },
+            )
+            .await?;
+
+        tracing::info!("{:?}", layer_set);
+
+        source_service.refresh_source(&auth, &source.name).await?;
+
+        build_service.build().await?;
+
+        if let (Some(secret_key), Some(secret_key_id)) =
+            (config.acme.secret_key, config.acme.secret_key_id)
+        {
+            let AcmeDnsConfig::Server {
+                udp_bind: dns_udp_addr,
+                tcp_bind: dns_tcp_addr,
+                zone: dns_zone,
+            } = config.acme.dns;
+
+            let dns_server = dns::serve(domain_service, dns_zone, dns_udp_addr, dns_tcp_addr);
+
+            tokio::spawn(async move {
+                let res = dns_server.await;
+                if let Err(err) = res {
+                    tracing::error!("dns: {err:?}");
+                }
+            });
+        }
+
+        server::serve(
+            http_service,
+            config.http.bind,
+            config.http.redirect_https,
+            config.http.redirect_https_port,
+            config.https.bind,
+            config.api.host,
+        )
+        .await?;
+
+        return Ok(());
+
         let DatabaseConfig::Postgres { url: database_url } = config.database;
         let database = backends::PostgresDatabase::connect(&database_url).await?;
         database.migrate().await?;
@@ -250,28 +366,7 @@ async fn main() -> Result<()> {
         if let (Some(secret_key), Some(secret_key_id)) =
             (config.acme.secret_key, config.acme.secret_key_id)
         {
-            let AcmeDnsConfig::Server {
-                udp_bind: dns_udp_addr,
-                tcp_bind: dns_tcp_addr,
-                zone: dns_zone,
-            } = config.acme.dns;
-
             let secret_key = fairing_acme::ES256SecretKey::parse_key(&secret_key)?;
-
-            let dns_server = dns::serve(
-                database.database(),
-                dns_zone,
-                dns_udp_addr,
-                dns_tcp_addr,
-                secret_key.public_key(),
-            );
-
-            tokio::spawn(async move {
-                let res = dns_server.await;
-                if let Err(err) = res {
-                    tracing::error!("dns: {err:?}");
-                }
-            });
 
             let http_client = reqwest::Client::builder()
                 .https_only(true)
@@ -294,18 +389,6 @@ async fn main() -> Result<()> {
         } else {
             tracing::info!("not starting acme dns server because private_key is not set");
         }
-
-        server::serve(
-            database.database(),
-            database.file_metadata(),
-            file_storage,
-            config.http.bind,
-            config.http.redirect_https,
-            config.http.redirect_https_port,
-            config.https.bind,
-            config.api.host,
-        )
-        .await?;
     } else if let Commands::Acme { command } = args.command {
         let AcmeCommands::Create {
             mail_contact,

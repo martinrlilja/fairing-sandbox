@@ -1,5 +1,8 @@
 [workspace]
 members = [
+    "crates/fairing-core",
+    "crates/git-repositories",
+    "crates/scylla-repositories",
     "fairing",
     "fairing-acme",
     "fairing-core",

@@ -1,6 +1,9 @@
 [database]
 type = "postgres"
 url = "psql://postgres:password@localhost:5432/postgres"
+#type = "scylladb"
+#known_nodes = ["localhost"]
+#keyspace_name = "fairing"
 
 [acme]
 server = "https://0.0.0.0:14000/dir"

@@ -15,21 +15,19 @@ use trust_dns_server::{
 };
 
 use fairing_acme::ES256PublicKey;
-use fairing_core::backends::Database;
+use fairing_core2::services::DomainService;
 
 pub async fn serve(
-    database: Database,
+    domains: DomainService,
     zone: String,
     udp_addr: Vec<SocketAddr>,
     tcp_addr: Vec<SocketAddr>,
-    public_key: ES256PublicKey,
 ) -> Result<()> {
     let zone = LowerName::from_str(&zone)?;
 
     let authority = Authority {
         origin: zone.base_name(),
-        database,
-        public_key,
+        domains,
     };
 
     let mut catalog = Catalog::new();
@@ -58,16 +56,14 @@ pub async fn serve(
 
 struct Authority {
     origin: LowerName,
-    database: Database,
-    public_key: ES256PublicKey,
+    domains: DomainService,
 }
 
 impl AuthorityObject for Authority {
     fn box_clone(&self) -> Box<dyn AuthorityObject> {
         Box::new(Authority {
             origin: self.origin.clone(),
-            database: self.database.clone(),
-            public_key: self.public_key.clone(),
+            domains: self.domains,
         })
     }
 
@@ -137,32 +133,34 @@ impl AuthorityObject for Authority {
                         None => return Ok(Box::new(AuthLookup::Empty) as Box<dyn LookupObject>),
                     };
 
-                    let challenge = self
-                        .database
-                        .get_domain_acme_challenge(&acme_label)
+                    let challenges = self
+                        .domains
+                        .get_acme_dns_01_challenges(&acme_label)
                         .await
                         .map_err(|err| {
                             tracing::error!("error looking up acme challenge: {:?}", err);
                             LookupError::ResponseCode(ResponseCode::ServFail)
                         })?;
 
-                    let challenge = match challenge {
-                        Some(challenge) => challenge,
-                        None => return Ok(Box::new(AuthLookup::Empty) as Box<dyn LookupObject>),
-                    };
+                    if challenges.is_empty() {
+                        return Ok(Box::new(AuthLookup::Empty) as Box<dyn LookupObject>);
+                    }
 
+                    /*
                     let key_authorization = self
                         .public_key
                         .dns_key_authorization(&challenge.dns_01_token);
+                    */
 
                     let mut records =
                         RecordSet::with_ttl(request_info.query.name().into(), RecordType::TXT, 60);
-                    records.add_rdata(RData::TXT(rdata::TXT::new(vec![key_authorization])));
+                    records.add_rdata(RData::TXT(rdata::TXT::new(challenges)));
 
                     let answers = LookupRecords::Records {
                         lookup_options,
                         records: Arc::new(records),
                     };
+
                     Ok(Box::new(AuthLookup::Records {
                         answers,
                         additionals: None,

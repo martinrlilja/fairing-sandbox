@@ -88,15 +88,15 @@ async fn accept_socket(
         .server_name()
         .ok_or_else(|| anyhow!("client did not supply sni"))?;
 
-    let certificates = certificate_resolver.certificates.read().await;
-    let tls_acceptor = certificates.get(sni);
+    {
+        let certificates = certificate_resolver.certificates.read().await;
+        let tls_acceptor = certificates.get(sni);
 
-    if let Some(tls_acceptor) = tls_acceptor {
-        let tls_stream = tls_acceptor.accept(tcp_stream).await?;
-        return Ok(tls_stream);
+        if let Some(tls_acceptor) = tls_acceptor {
+            let tls_stream = tls_acceptor.accept(tcp_stream).await?;
+            return Ok(tls_stream);
+        }
     }
-
-    drop(certificates);
 
     let certificate = certificate_resolver
         .database
